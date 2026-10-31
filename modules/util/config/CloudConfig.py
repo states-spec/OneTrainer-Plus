@@ -9,11 +9,13 @@ from modules.util.enum.CloudType import CloudType
 
 # A cloud machine installs OneTrainer+ from its own repository. The install command runs in the folder above
 # onetrainer_dir and has to create it: git clone names the folder after the repository.
-DEFAULT_ONETRAINER_DIR = "/workspace/" + REPOSITORY_URL.rstrip("/").rsplit("/", 1)[-1]
+DEFAULT_ONETRAINER_DIR = "/workspace/" + REPOSITORY_URL.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
 DEFAULT_INSTALL_CMD = f"git clone {REPOSITORY_URL}"
 # OneTrainer's defaults, which installed upstream OneTrainer; configs saved before this fork changed them hold these
 _UPSTREAM_ONETRAINER_DIR = "/workspace/OneTrainer"
 _UPSTREAM_INSTALL_CMD = "git clone https://github.com/Nerogar/OneTrainer"
+# notes already printed: the UI and scripts/train.py both read a config twice
+_printed_notes: set[str] = set()
 
 
 class CloudSecretsConfig(BaseConfig):
@@ -100,9 +102,11 @@ class CloudConfig(BaseConfig):
         if self.install_cmd == _UPSTREAM_INSTALL_CMD and self.onetrainer_dir == _UPSTREAM_ONETRAINER_DIR:
             self.install_cmd = DEFAULT_INSTALL_CMD
             self.onetrainer_dir = DEFAULT_ONETRAINER_DIR
-            if self.enabled:
-                print(f"Cloud: the config names upstream OneTrainer's default repository and folder; installing "
-                      f"{APP_NAME} from {REPOSITORY_URL} into {DEFAULT_ONETRAINER_DIR} instead")
+            note = (f"Cloud: the config names upstream OneTrainer's default repository and folder; installing "
+                    f"{APP_NAME} from {REPOSITORY_URL} into {DEFAULT_ONETRAINER_DIR} instead")
+            if self.enabled and note not in _printed_notes:
+                _printed_notes.add(note)
+                print(note)
         return self
 
     @staticmethod
