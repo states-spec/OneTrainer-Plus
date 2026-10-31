@@ -1,7 +1,8 @@
 
 from abc import ABC, abstractmethod
 
-from modules.util.app_info import APP_NAME
+from modules.util.app_info import APP_NAME, REPOSITORY_URL
+from modules.util.config.CloudConfig import DEFAULT_ONETRAINER_DIR
 from modules.util.enum.CloudAction import CloudAction
 from modules.util.enum.CloudFileSync import CloudFileSync
 from modules.util.enum.CloudType import CloudType
@@ -79,20 +80,24 @@ class BaseCloudTabView(ABC):
         self.components.label(frame, 1, 2, "Remote Directory",
                          tooltip="The directory on the cloud where files will be uploaded and downloaded.")
         self.components.entry(frame, 1, 3, ui_state, "cloud.remote_dir")
-        self.components.label(frame, 2, 2, "OneTrainer Directory",
-                         tooltip="The directory for OneTrainer on the cloud.")
+        self.components.label(frame, 2, 2, f"{APP_NAME} Directory",
+                         tooltip=f"The directory for {APP_NAME} on the cloud. The install command runs in the directory above it "
+                                 f"and has to create it: the default clones {REPOSITORY_URL} into "
+                                 f"{DEFAULT_ONETRAINER_DIR}.")
         self.components.entry(frame, 2, 3, ui_state, "cloud.onetrainer_dir")
         self.components.label(frame, 3, 2, "Huggingface cache Directory",
                          tooltip="Huggingface models are downloaded to this remote directory.")
         self.components.entry(frame, 3, 3, ui_state, "cloud.huggingface_cache_dir")
-        self.components.label(frame, 4, 2, "Install OneTrainer",
-                         tooltip="Automatically install OneTrainer from GitHub if the directory doesn't already exist.")
+        self.components.label(frame, 4, 2, f"Install {APP_NAME}",
+                         tooltip=f"Automatically install {APP_NAME} from GitHub if the directory doesn't already exist.")
         self.components.switch(frame, 4, 3, ui_state, "cloud.install_onetrainer")
         self.components.label(frame, 5, 2, "Install command",
-                         tooltip="The command for installing OneTrainer. Leave the default, unless you want to use a development branch of OneTrainer.")
+                         tooltip=f"The command for installing {APP_NAME}. It runs in the directory above the {APP_NAME} directory and "
+                                 f"has to create that directory. The default clones {APP_NAME}'s repository ({REPOSITORY_URL}); "
+                                 f"change it only to install another branch or repository.")
         self.components.entry(frame, 5, 3, ui_state, "cloud.install_cmd")
-        self.components.label(frame, 6, 2, "Update OneTrainer",
-                         tooltip="Update OneTrainer if it already exists on the cloud.")
+        self.components.label(frame, 6, 2, f"Update {APP_NAME}",
+                         tooltip=f"Update {APP_NAME} if it already exists on the cloud.")
         self.components.switch(frame, 6, 3, ui_state, "cloud.update_onetrainer")
 
         self.components.label(frame, 8, 2, "Detach remote trainer",

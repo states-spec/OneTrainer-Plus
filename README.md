@@ -22,6 +22,8 @@ whose work it is built on are listed under [Credits](#credits).
     need, and resumes that keep Prodigy's step size.
 -   **Training options**: CIOP, CEP and Immiscible Diffusion noise, an exact OFT rotation (CANS), DoRA-OFT and OFT
     spectral norm clipping (all off by default), and stochastic rounding for bfloat16 EMA weights (on by default).
+-   **Cloud training** installs OneTrainer+ from this repository on the cloud machine (upstream's default installed
+    OneTrainer; configs that still name upstream's default repository and folder switch to this one when loaded).
 -   **Diagnostics**: a JSONL record of each run, run comparisons and A/B runs, a per-step optimizer view and a config
     diff ([docs/RunDiagnostics.md](docs/RunDiagnostics.md)).
 -   **UI**: a dark theme by default, a settings tab (theme, scale, font size), tooltips that explain each choice, and
