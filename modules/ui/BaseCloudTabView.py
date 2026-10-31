@@ -1,6 +1,7 @@
 
 from abc import ABC, abstractmethod
 
+from modules.util.app_info import APP_NAME
 from modules.util.enum.CloudAction import CloudAction
 from modules.util.enum.CloudFileSync import CloudFileSync
 from modules.util.enum.CloudType import CloudType
@@ -98,7 +99,7 @@ class BaseCloudTabView(ABC):
                          tooltip="Allows the trainer to keep running even if your connection to the cloud is lost.")
         self.components.switch(frame, 8, 3, ui_state, "cloud.detach_trainer")
         self.components.label(frame, 9, 2, "Reattach id",
-                         tooltip="An id identifying the remotely running trainer. In case you have lost connection or closed OneTrainer, it will try to reattach to this id instead of starting a new remote trainer.")
+                         tooltip=f"An id identifying the remotely running trainer. In case you have lost connection or closed {APP_NAME}, it will try to reattach to this id instead of starting a new remote trainer.")
         reattach_frame = self._make_reattach_frame(frame)
         self.components.entry(reattach_frame, 0, 0, ui_state, "cloud.run_id", width=60)
         self.components.button(reattach_frame, 0, 1, "Reattach now", controller.do_reattach)

@@ -2,6 +2,7 @@
 
 ## Overview
 - OneTrainer: diffusion-model trainer (full fine-tune, LoRA/LoHa/LoKr/OFTv2, embeddings) for SD1.5 through Flux/Chroma/Qwen/etc. Has a Qt GUI and a headless CLI.
+- This repository is **OneTrainer+** (`states-spec/OneTrainer-Plus`), a fork of Nerogar/OneTrainer. The UI shows the name from `modules/util/app_info.APP_NAME` (window titles, top bar, settings/tooltip texts). The OneTrainer name stays wherever it is data or upstream's: file formats and keys (`onetrainer_config/`, LoRA layouts, metadata), `OT_` variables, the debug report file name, the wiki link, the launch scripts' `[OneTrainer]` prefix, and the cloud tab (its default `install_cmd` clones Nerogar/OneTrainer: a default value, unchanged). The README credits upstream's authors and the Koratahiu ports; keep its Credits list current when porting more.
 - Built on diffusers + a custom graph data loader, **mgds** (pinned git commit in `requirements-global.txt`).
 - User docs: [README.md](README.md), [LAUNCH-SCRIPTS.md](LAUNCH-SCRIPTS.md), [docs/](docs/). Don't repeat them here.
 

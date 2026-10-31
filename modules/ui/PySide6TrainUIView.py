@@ -28,6 +28,7 @@ from modules.ui.SettingsTabController import SettingsTabController
 from modules.ui.TopBarController import TopBarController
 from modules.ui.TrainingTabController import TrainingTabController
 from modules.ui.TrainUIController import TrainUIController
+from modules.util.app_info import APP_NAME
 from modules.util.config.TrainConfig import TrainConfig
 from modules.util.config.UISettingsConfig import UISettingsConfig
 from modules.util.enum.ModelType import ModelType
@@ -53,7 +54,7 @@ class PySide6TrainView(BaseTrainUIView, QMainWindow, metaclass=QtABCMeta):
         BaseTrainUIView.__init__(self, pyside6_components, controller, ui_state)
         self.controller.view = self
 
-        self.setWindowTitle("OneTrainer")
+        self.setWindowTitle(APP_NAME)
         self.setWindowIcon(QIcon("resources/icons/icon.png"))
         self.resize(1100, 740)
 

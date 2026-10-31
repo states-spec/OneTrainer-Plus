@@ -4,6 +4,7 @@ from modules.ui.BaseCaptionUIView import BaseCaptionUIView
 from modules.ui.CaptionUIController import CaptionUIController
 from modules.ui.CtkGenerateCaptionsWindowView import CtkGenerateCaptionsWindowView
 from modules.ui.CtkGenerateMasksWindowView import CtkGenerateMasksWindowView
+from modules.util.app_info import APP_NAME
 from modules.util.ui import ctk_components
 from modules.util.ui.CtkUIState import CtkUIState
 from modules.util.ui.ui_utils import bind_mousewheel, set_window_icon
@@ -31,7 +32,7 @@ class CtkCaptionUIView(BaseCaptionUIView, ctk.CTkToplevel):
         self.file_list = None
         self.image_labels = []
 
-        self.title("OneTrainer")
+        self.title(APP_NAME)
         self.geometry("1280x980")
         self.resizable(False, False)
 

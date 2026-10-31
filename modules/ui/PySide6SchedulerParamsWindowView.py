@@ -1,6 +1,7 @@
 from modules.ui.BaseSchedulerParamsWindowView import BaseKvParamsView, BaseSchedulerParamsWindowView
 from modules.ui.PySide6ConfigListView import PySide6ConfigListView
 from modules.ui.SchedulerParamsWindowController import KvParamsController, SchedulerParamsWindowController
+from modules.util.app_info import APP_NAME
 from modules.util.ui import pyside6_components
 from modules.util.ui.PySide6UIState import PySide6UIState
 
@@ -47,7 +48,7 @@ class PySide6KvWidget(QWidget):
 
         # Value
         self.value = pyside6_components.entry(self, 0, 2, self.ui_state, "value",
-                                              tooltip="Value for an argument in your scheduler. Some special values can be used, wrapped in percent signs: LR, EPOCHS, STEPS_PER_EPOCH, TOTAL_STEPS, SCHEDULER_STEPS. Note that OneTrainer calls step() after every individual learning step, not every epoch, so what Torch calls 'epoch' you should treat as 'step'.",
+                                              tooltip=f"Value for an argument in your scheduler. Some special values can be used, wrapped in percent signs: LR, EPOCHS, STEPS_PER_EPOCH, TOTAL_STEPS, SCHEDULER_STEPS. Note that {APP_NAME} calls step() after every individual learning step, not every epoch, so what Torch calls 'epoch' you should treat as 'step'.",
                                               wide_tooltip=True, width=50)
         self.value.editingFinished.connect(save_command)
 

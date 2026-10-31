@@ -1,5 +1,7 @@
 from abc import abstractmethod
 
+from modules.util.app_info import APP_NAME
+
 
 class BaseProfilingWindowView:
     def __init__(self, components):
@@ -9,7 +11,7 @@ class BaseProfilingWindowView:
         self.components.button(frame, 0, 0, "Dump stack", controller.dump_stack)
         self._profile_button = self.components.button(
             frame, 1, 0, "Start Profiling", controller.start_profiler,
-            tooltip="Turns on/off Scalene profiling. Only works when OneTrainer is launched with Scalene!")
+            tooltip=f"Turns on/off Scalene profiling. Only works when {APP_NAME} is launched with Scalene!")
         self._message_label = self.components.label(bottom_bar, 0, 0, "Inactive")
 
     @abstractmethod

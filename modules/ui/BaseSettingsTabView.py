@@ -1,3 +1,6 @@
+from modules.util.app_info import APP_NAME
+
+
 class BaseSettingsTabView:
     def __init__(self, components):
         self.components = components
@@ -40,7 +43,7 @@ class BaseSettingsTabView:
         if controller.supports_system_file_dialogs:
             self.components.label(frame, row, 0, "System File Dialogs",
                                   tooltip="Use the desktop's file and folder dialogs (GTK, portal or KDE) for the \"...\" buttons instead of "
-                                          "OneTrainer's own. Off by default: on some Linux desktops the system dialog freezes or crashes OneTrainer. "
+                                          f"{APP_NAME}'s own. Off by default: on some Linux desktops the system dialog freezes or crashes {APP_NAME}. "
                                           "On GTK desktops (GNOME, Cinnamon, MATE, Xfce) the GTK dialog needs a restart of the UI after switching this on.")
             self.components.switch(frame, row, 1, ui_state, "system_file_dialogs")
             row += 1
@@ -55,4 +58,4 @@ class BaseSettingsTabView:
 
     def __restart_note(self, frame, row, controller, name):
         if name in controller.needs_restart:
-            self.components.label(frame, row, 2, "Applies after restarting OneTrainer")
+            self.components.label(frame, row, 2, f"Applies after restarting {APP_NAME}")
