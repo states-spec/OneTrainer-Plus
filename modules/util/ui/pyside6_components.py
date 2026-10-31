@@ -3,6 +3,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 
+from modules.util.app_info import APP_NAME
 from modules.util.enum.PathIOType import PathIOType
 from modules.util.enum.TimeUnit import TimeUnit
 from modules.util.path_util import supported_image_extensions, supported_video_extensions
@@ -141,7 +142,7 @@ def app_title(master: QWidget, row: int, column: int):
     icon_label.setPixmap(pixmap)
     layout.addWidget(icon_label, 0, 0)
 
-    text_label = QLabel("OneTrainer", frame)
+    text_label = QLabel(APP_NAME, frame)
     font = text_label.font()
     font.setPointSize(14)
     font.setBold(True)

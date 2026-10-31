@@ -7,6 +7,7 @@ from pathlib import Path
 from modules.cloud.BaseCloud import BaseCloud
 from modules.cloud.FabricFileSync import FabricFileSync
 from modules.cloud.NativeSCPFileSync import NativeSCPFileSync
+from modules.util.app_info import APP_NAME
 from modules.util.callbacks.TrainCallbacks import TrainCallbacks
 from modules.util.commands.TrainCommands import TrainCommands
 from modules.util.config.TrainConfig import TrainConfig
@@ -91,6 +92,14 @@ class LinuxCloud(BaseCloud):
                               || (mkdir -p {shlex.quote(parent)} \
                                   && cd {shlex.quote(parent)} \
                                   && {config.install_cmd})',in_stream=False)
+
+        #the install command runs in the parent directory and has to create onetrainer_dir (git clone names the
+        #directory after the repository). Say so here, instead of failing later on a missing directory:
+        result=self.connection.run(f"test -d {shlex.quote(config.onetrainer_dir)}",warn=True,in_stream=False)
+        if result.exited != 0:
+            raise RuntimeError(f"{config.onetrainer_dir} doesn't exist on the cloud machine after the install command "
+                               f"({config.install_cmd}) ran in {parent}: the install command has to create that "
+                               f"directory, so the {APP_NAME} directory and the install command must name the same one")
 
         result=self.connection.run(f"test -d {shlex.quote(config.onetrainer_dir)}/venv",warn=True,in_stream=False)
 

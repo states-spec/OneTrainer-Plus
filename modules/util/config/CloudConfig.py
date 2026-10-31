@@ -1,10 +1,21 @@
 from pathlib import Path
 from typing import Any
 
+from modules.util.app_info import APP_NAME, REPOSITORY_URL
 from modules.util.config.BaseConfig import BaseConfig
 from modules.util.enum.CloudAction import CloudAction
 from modules.util.enum.CloudFileSync import CloudFileSync
 from modules.util.enum.CloudType import CloudType
+
+# A cloud machine installs OneTrainer+ from its own repository. The install command runs in the folder above
+# onetrainer_dir and has to create it: git clone names the folder after the repository.
+DEFAULT_ONETRAINER_DIR = "/workspace/" + REPOSITORY_URL.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
+DEFAULT_INSTALL_CMD = f"git clone {REPOSITORY_URL}"
+# OneTrainer's defaults, which installed upstream OneTrainer; configs saved before this fork changed them hold these
+_UPSTREAM_ONETRAINER_DIR = "/workspace/OneTrainer"
+_UPSTREAM_INSTALL_CMD = "git clone https://github.com/Nerogar/OneTrainer"
+# notes already printed: the UI and scripts/train.py both read a config twice
+_printed_notes: set[str] = set()
 
 
 class CloudSecretsConfig(BaseConfig):
@@ -84,6 +95,20 @@ class CloudConfig(BaseConfig):
     def __init__(self, data: list[(str, Any, type, bool)]):
         super().__init__(data)
 
+    def from_dict(self, data: dict, migrate: bool = True) -> 'CloudConfig':
+        super().from_dict(data, migrate)
+        # upstream's default pair (still in configs saved before) installs upstream OneTrainer: replace it with
+        # OneTrainer+'s own. Anything else was set by hand and stays.
+        if self.install_cmd == _UPSTREAM_INSTALL_CMD and self.onetrainer_dir == _UPSTREAM_ONETRAINER_DIR:
+            self.install_cmd = DEFAULT_INSTALL_CMD
+            self.onetrainer_dir = DEFAULT_ONETRAINER_DIR
+            note = (f"Cloud: the config names upstream OneTrainer's default repository and folder; installing "
+                    f"{APP_NAME} from {REPOSITORY_URL} into {DEFAULT_ONETRAINER_DIR} instead")
+            if self.enabled and note not in _printed_notes:
+                _printed_notes.add(note)
+                print(note)
+        return self
+
     @staticmethod
     def default_values():
         data = []
@@ -100,8 +125,8 @@ class CloudConfig(BaseConfig):
         data.append(("min_download", 0, int, False))
         data.append(("remote_dir", "/workspace", str, False))
         data.append(("huggingface_cache_dir", "/workspace/huggingface_cache", str, False))
-        data.append(("onetrainer_dir", "/workspace/OneTrainer", str, False))
-        data.append(("install_cmd", "git clone https://github.com/Nerogar/OneTrainer", str, False))
+        data.append(("onetrainer_dir", DEFAULT_ONETRAINER_DIR, str, False))
+        data.append(("install_cmd", DEFAULT_INSTALL_CMD, str, False))
         data.append(("install_onetrainer", True, bool, False))
         data.append(("update_onetrainer", True, bool, False))
         data.append(("detach_trainer", False, bool, False))

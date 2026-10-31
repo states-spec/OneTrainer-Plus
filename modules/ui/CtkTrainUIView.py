@@ -32,6 +32,7 @@ from modules.ui.SettingsTabController import SettingsTabController
 from modules.ui.TopBarController import TopBarController
 from modules.ui.TrainingTabController import TrainingTabController
 from modules.ui.TrainUIController import TrainUIController
+from modules.util.app_info import APP_NAME
 from modules.util.config.TrainConfig import TrainConfig
 from modules.util.config.UISettingsConfig import UISettingsConfig
 from modules.util.enum.ModelType import ModelType
@@ -93,7 +94,7 @@ class CtkTrainUIView(BaseTrainUIView, ctk.CTk):
         BaseTrainUIView.__init__(self, ctk_components, controller, ui_state)
         self.controller.view = self
 
-        self.title("OneTrainer")
+        self.title(APP_NAME)
         self.geometry("1100x740")
 
         self.after(100, lambda: self._set_icon())

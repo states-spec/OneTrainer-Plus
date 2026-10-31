@@ -5,6 +5,7 @@ from pathlib import Path
 from tkinter import filedialog
 from typing import Any, Literal
 
+from modules.util.app_info import APP_NAME
 from modules.util.enum.PathIOType import PathIOType
 from modules.util.enum.TimeUnit import TimeUnit
 from modules.util.path_util import supported_image_extensions, supported_video_extensions
@@ -30,7 +31,7 @@ def app_title(master, row, column):
     image_label_component = ctk.CTkLabel(frame, image=image_component, text="")
     image_label_component.grid(row=0, column=0, padx=PAD, pady=PAD)
 
-    label_component = ctk.CTkLabel(frame, text="OneTrainer", font=ctk.CTkFont(size=20, weight="bold"))
+    label_component = ctk.CTkLabel(frame, text=APP_NAME, font=ctk.CTkFont(size=20, weight="bold"))
     label_component.grid(row=0, column=1, padx=(0, PAD), pady=PAD)
 
 

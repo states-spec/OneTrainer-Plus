@@ -1,6 +1,7 @@
 from modules.ui.BaseSchedulerParamsWindowView import BaseKvParamsView, BaseSchedulerParamsWindowView
 from modules.ui.CtkConfigListView import CtkConfigListView
 from modules.ui.SchedulerParamsWindowController import KvParamsController, SchedulerParamsWindowController
+from modules.util.app_info import APP_NAME
 from modules.util.ui import ctk_components
 from modules.util.ui.CtkUIState import CtkUIState
 from modules.util.ui.ui_utils import set_window_icon
@@ -56,7 +57,7 @@ class KvWidget(ctk.CTkFrame):
         self.key.configure(width=50)
 
         # Value
-        tooltip_val = "Value for an argument in your scheduler. Some special values can be used, wrapped in percent signs: LR, EPOCHS, STEPS_PER_EPOCH, TOTAL_STEPS, SCHEDULER_STEPS. Note that OneTrainer calls step() after every individual learning step, not every epoch, so what Torch calls 'epoch' you should treat as 'step'."
+        tooltip_val = f"Value for an argument in your scheduler. Some special values can be used, wrapped in percent signs: LR, EPOCHS, STEPS_PER_EPOCH, TOTAL_STEPS, SCHEDULER_STEPS. Note that {APP_NAME} calls step() after every individual learning step, not every epoch, so what Torch calls 'epoch' you should treat as 'step'."
         self.value = ctk_components.entry(self, 0, 2, self.ui_state, "value",
                                       tooltip=tooltip_val, wide_tooltip=True)
         self.value.bind("<FocusOut>", lambda _: save_command())
