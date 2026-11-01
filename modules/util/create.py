@@ -133,6 +133,27 @@ def _adv_orthograd_mode(value) -> str:
     return value if value is not None else "disabled"
 
 
+def _bnb_optimizer(optimizer_class, **kwargs):
+    # bitsandbytes 0.50 removed percentile_clipping and block_wise from every optimizer (percentile clipping is gone,
+    # 8-bit states are always block-wise), so passing them raised a TypeError when the optimizer was built, after the
+    # model had loaded (upstream's preview-2 pins 0.50.2 with these arguments). They are passed only where the
+    # installed bitsandbytes takes them; a setting that can't take effect there is named
+    import inspect
+
+    import bitsandbytes as bnb
+    accepted = inspect.signature(optimizer_class.__init__).parameters
+    ignored = []
+    if "percentile_clipping" not in accepted and kwargs.pop("percentile_clipping", 100) < 100:
+        ignored.append("Percentile Clipping (removed)")
+    has_8bit_state = "8bit" in optimizer_class.__name__ or kwargs.get("optim_bits") == 8
+    if "block_wise" not in accepted and kwargs.pop("block_wise", True) is False and has_8bit_state:
+        ignored.append("Block Wise off (8-bit states are always block-wise)")
+    if ignored:
+        print(f"Warning: bitsandbytes {bnb.__version__} ignores these {optimizer_class.__name__} settings: "
+              f"{', '.join(ignored)}.")
+    return optimizer_class(**kwargs)
+
+
 def _bnb_lars_on_momentum_kernels(optimizer):
     # bitsandbytes' LARS is SGD with momentum whose update is limited to max_unorm times the weight norm, run on
     # momentum's kernels. bitsandbytes 0.49 has no "lars" entry in its 32-bit kernel table (its 8-bit table still maps
@@ -426,7 +447,7 @@ def create_optimizer(
         # SGD_8BIT Optimizer
         case Optimizer.SGD_8BIT:
             import bitsandbytes as bnb
-            optimizer = bnb.optim.SGD8bit(
+            optimizer = _bnb_optimizer(bnb.optim.SGD8bit,
                 params=parameters,
                 lr=config.learning_rate,
                 momentum=optimizer_config.momentum if optimizer_config.momentum is not None else 0,
@@ -494,7 +515,7 @@ def create_optimizer(
         # ADAM_8BIT Optimizer
         case Optimizer.ADAM_8BIT:
             import bitsandbytes as bnb
-            optimizer = bnb.optim.Adam8bit(
+            optimizer = _bnb_optimizer(bnb.optim.Adam8bit,
                 params=parameters,
                 lr=config.learning_rate,
                 betas=(optimizer_config.beta1 if optimizer_config.beta1 is not None else 0.9,
@@ -510,7 +531,7 @@ def create_optimizer(
         # ADAMW_8BIT Optimizer
         case Optimizer.ADAMW_8BIT:
             import bitsandbytes as bnb
-            optimizer = bnb.optim.AdamW8bit(
+            optimizer = _bnb_optimizer(bnb.optim.AdamW8bit,
                 params=parameters,
                 lr=config.learning_rate,
                 betas=(optimizer_config.beta1 if optimizer_config.beta1 is not None else 0.9,
@@ -526,7 +547,7 @@ def create_optimizer(
         # AdEMAMix_8BIT Optimizer
         case Optimizer.AdEMAMix_8BIT:
             import bitsandbytes as bnb
-            optimizer = bnb.optim.AdEMAMix8bit(
+            optimizer = _bnb_optimizer(bnb.optim.AdEMAMix8bit,
                 params=parameters,
                 lr=config.learning_rate,
                 betas=(optimizer_config.beta1 if optimizer_config.beta1 is not None else 0.9,
@@ -542,7 +563,7 @@ def create_optimizer(
         # AdEMAMix Optimizer
         case Optimizer.AdEMAMix:
             import bitsandbytes as bnb
-            optimizer = bnb.optim.AdEMAMix(
+            optimizer = _bnb_optimizer(bnb.optim.AdEMAMix,
                 params=parameters,
                 lr=config.learning_rate,
                 betas=(optimizer_config.beta1 if optimizer_config.beta1 is not None else 0.9,
@@ -559,7 +580,7 @@ def create_optimizer(
         # ADAGRAD Optimizer
         case Optimizer.ADAGRAD:
             import bitsandbytes as bnb
-            optimizer = bnb.optim.Adagrad(
+            optimizer = _bnb_optimizer(bnb.optim.Adagrad,
                 params=parameters,
                 lr=config.learning_rate,
                 weight_decay=optimizer_config.weight_decay if optimizer_config.weight_decay is not None else 0,
@@ -571,7 +592,7 @@ def create_optimizer(
         # ADAGRAD_8BIT Optimizer
         case Optimizer.ADAGRAD_8BIT:
             import bitsandbytes as bnb
-            optimizer = bnb.optim.Adagrad8bit(
+            optimizer = _bnb_optimizer(bnb.optim.Adagrad8bit,
                 params=parameters,
                 lr=config.learning_rate,
                 weight_decay=optimizer_config.weight_decay if optimizer_config.weight_decay is not None else 0,
@@ -586,7 +607,7 @@ def create_optimizer(
         # RMSPROP Optimizer
         case Optimizer.RMSPROP:
             import bitsandbytes as bnb
-            optimizer = bnb.optim.RMSprop(
+            optimizer = _bnb_optimizer(bnb.optim.RMSprop,
                 params=parameters,
                 lr=config.learning_rate,
                 weight_decay=optimizer_config.weight_decay if optimizer_config.weight_decay is not None else 0,
@@ -599,7 +620,7 @@ def create_optimizer(
         # RMSPROP_8BIT Optimizer
         case Optimizer.RMSPROP_8BIT:
             import bitsandbytes as bnb
-            optimizer = bnb.optim.RMSprop8bit(
+            optimizer = _bnb_optimizer(bnb.optim.RMSprop8bit,
                 params=parameters,
                 lr=config.learning_rate,
                 weight_decay=optimizer_config.weight_decay if optimizer_config.weight_decay is not None else 0,
@@ -627,7 +648,7 @@ def create_optimizer(
         # LARS Optimizer
         case Optimizer.LARS:
             import bitsandbytes as bnb
-            optimizer = _bnb_lars_on_momentum_kernels(bnb.optim.LARS(
+            optimizer = _bnb_lars_on_momentum_kernels(_bnb_optimizer(bnb.optim.LARS,
                 params=parameters,
                 lr=config.learning_rate,
                 weight_decay=optimizer_config.weight_decay if optimizer_config.weight_decay is not None else 0,
@@ -640,7 +661,7 @@ def create_optimizer(
         # LARS_8BIT Optimizer
         case Optimizer.LARS_8BIT:
             import bitsandbytes as bnb
-            optimizer = _bnb_lars_on_momentum_kernels(bnb.optim.LARS8bit(
+            optimizer = _bnb_lars_on_momentum_kernels(_bnb_optimizer(bnb.optim.LARS8bit,
                 params=parameters,
                 lr=config.learning_rate,
                 weight_decay=optimizer_config.weight_decay if optimizer_config.weight_decay is not None else 0,
@@ -655,7 +676,7 @@ def create_optimizer(
         # LAMB Optimizer
         case Optimizer.LAMB:
             import bitsandbytes as bnb
-            optimizer = bnb.optim.LAMB(
+            optimizer = _bnb_optimizer(bnb.optim.LAMB,
                 params=parameters,
                 lr=config.learning_rate,
                 bias_correction=optimizer_config.bias_correction if optimizer_config.bias_correction is not None else True,
@@ -675,7 +696,7 @@ def create_optimizer(
         # LAMB_8BIT Optimizer
         case Optimizer.LAMB_8BIT:
             import bitsandbytes as bnb
-            optimizer = bnb.optim.LAMB8bit(
+            optimizer = _bnb_optimizer(bnb.optim.LAMB8bit,
                 params=parameters,
                 lr=config.learning_rate,
                 bias_correction=optimizer_config.bias_correction if optimizer_config.bias_correction is not None else True,
@@ -694,7 +715,7 @@ def create_optimizer(
         # LION_8BIT Optimizer
         case Optimizer.LION_8BIT:
             import bitsandbytes as bnb
-            optimizer = bnb.optim.Lion8bit(
+            optimizer = _bnb_optimizer(bnb.optim.Lion8bit,
                 params=parameters,
                 lr=config.learning_rate if config.learning_rate is not None else 0,
                 weight_decay=optimizer_config.weight_decay if optimizer_config.weight_decay is not None else 0,
