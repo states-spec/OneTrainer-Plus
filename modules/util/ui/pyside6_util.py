@@ -136,7 +136,9 @@ def _checkbox_indicator_style_sheet(size_at_default_font: int) -> str:
 
 def _is_dark(app: QApplication, theme: UITheme) -> bool:
     if theme == UITheme.SYSTEM:
-        return app.styleHints().colorScheme() == Qt.ColorScheme.Dark
+        # dark unless the OS asks for light: GNOME's "Default" style and desktops without a color scheme setting report
+        # no preference (Unknown)
+        return app.styleHints().colorScheme() != Qt.ColorScheme.Light
     return theme == UITheme.DARK
 
 

@@ -1,3 +1,6 @@
+import subprocess
+import sys
+
 from modules.ui.BaseSettingsTabView import BaseSettingsTabView
 from modules.ui.SettingsTabController import SettingsTabController
 from modules.util.config.UISettingsConfig import UISettingsConfig
@@ -5,7 +8,7 @@ from modules.util.enum.UITheme import UITheme
 from modules.util.ui import ctk_components
 
 import customtkinter as ctk
-from customtkinter import AppearanceModeTracker
+import darkdetect
 
 
 def apply_ui_theme(settings: UISettingsConfig):
@@ -13,9 +16,23 @@ def apply_ui_theme(settings: UISettingsConfig):
     # appearance mode changes later
     if settings.theme == UITheme.SYSTEM:
         # more efficient version of ctk.set_appearance_mode("System"), which retrieves the system theme on each main loop iteration
-        ctk.set_appearance_mode("Light" if AppearanceModeTracker.detect_appearance_mode() == 0 else "Dark")
+        ctk.set_appearance_mode("Light" if _system_prefers_light() else "Dark")
     else:
         ctk.set_appearance_mode("Dark" if settings.theme == UITheme.DARK else "Light")
+
+
+def _system_prefers_light() -> bool:
+    # an explicit light preference only: no preference is dark, as in the Qt UI. On Linux darkdetect (customtkinter's
+    # detection) also says Light for GNOME's "Default" style (color-scheme 'default', i.e. no preference) and when it
+    # can't tell, so GNOME's setting is read here
+    if sys.platform.startswith("linux"):
+        try:
+            result = subprocess.run(["gsettings", "get", "org.gnome.desktop.interface", "color-scheme"],
+                                    capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return result.stdout.strip().strip("'") == "prefer-light"
+    return darkdetect.theme() == "Light"
 
 
 def apply_ui_scale(settings: UISettingsConfig):
