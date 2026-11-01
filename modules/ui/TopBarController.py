@@ -3,7 +3,6 @@ import json
 import os
 import shutil
 import traceback
-import webbrowser
 from contextlib import suppress
 
 from modules.util import path_util
@@ -13,6 +12,7 @@ from modules.util.enum.ModelType import ModelType
 from modules.util.enum.TrainingMethod import TrainingMethod
 from modules.util.optimizer_util import default_optimizer_config
 from modules.util.path_util import write_json_atomic
+from modules.util.ui.browser_util import open_url
 
 # base models for the model types that have no built-in preset (the others use their presets' choice)
 FALLBACK_BASE_MODELS = {
@@ -199,7 +199,7 @@ class TopBarController:
         return path
 
     def open_wiki(self):
-        webbrowser.open("https://github.com/Nerogar/OneTrainer/wiki", new=0, autoraise=False)
+        open_url("https://github.com/Nerogar/OneTrainer/wiki")
 
     def save_default(self):
         self.save_to_file("#")

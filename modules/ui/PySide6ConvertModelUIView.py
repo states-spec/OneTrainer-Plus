@@ -11,6 +11,10 @@ class PySide6ConvertModelUIView(BaseConvertModelUIView, QDialog):
         QDialog.__init__(self, parent)
         BaseConvertModelUIView.__init__(self, pyside6_components)
 
+        # delete on close: a parented QDialog is otherwise kept after exec() returns, one more each time the tool opens
+        # (the conversion runs on the UI thread, so nothing reports to the window after it closed)
+        self.finished.connect(self.deleteLater)
+
         self.controller = controller
         self.ui_state = PySide6UIState(controller.convert_model_args)
         self._dynamic_widgets = []

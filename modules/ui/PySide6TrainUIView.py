@@ -35,7 +35,13 @@ from modules.util.enum.ModelType import ModelType
 from modules.util.enum.TrainingMethod import TrainingMethod
 from modules.util.enum.UITheme import UITheme
 from modules.util.ui import pyside6_components
-from modules.util.ui.pyside6_util import QtABCMeta, apply_ui_settings, file_dialog_options, is_dark_theme
+from modules.util.ui.pyside6_util import (
+    QtABCMeta,
+    apply_ui_settings,
+    file_dialog_options,
+    is_dark_theme,
+    style_tab_widget,
+)
 from modules.util.ui.PySide6UIState import PySide6UIState
 
 from PySide6.QtCore import Qt, QTimer
@@ -93,6 +99,7 @@ class PySide6TrainView(BaseTrainUIView, QMainWindow, metaclass=QtABCMeta):
         central_lo.addWidget(self.top_bar_component, 0, 0)
 
         self.tabview = QTabWidget(central)
+        style_tab_widget(self.tabview)
         central_lo.addWidget(self.tabview, 1, 0)
 
         bottom = self._build_bottom_bar(central)

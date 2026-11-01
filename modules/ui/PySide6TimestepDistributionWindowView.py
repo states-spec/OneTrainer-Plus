@@ -2,8 +2,8 @@ from modules.ui.BaseTimestepDistributionWindowView import BaseTimestepDistributi
 from modules.ui.TimestepDistributionWindowController import TimestepDistributionWindowController
 from modules.util.ui import pyside6_components
 
-from matplotlib import pyplot as plt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+from matplotlib.figure import Figure
 from PySide6.QtWidgets import QDialog, QGridLayout, QPushButton
 
 
@@ -29,8 +29,16 @@ class PySide6TimestepDistributionWindowView(BaseTimestepDistributionWindowView, 
         self.build_content(frame, controller, ui_state)
         lo.setRowStretch(7, 1)
 
-        fig, self._ax = plt.subplots()
+        # a Figure of its own: pyplot keeps every figure it makes, with a hidden window for it under the Qt backend,
+        # until it is closed, so each opening of this window left one behind
+        fig = Figure()
+        self._ax = fig.add_subplot()
         self._canvas = FigureCanvasQTAgg(fig)
+        # the window's colors instead of matplotlib's white, as in the concept window's statistics
+        palette = self.palette()
+        self._text_color = palette.text().color().name()
+        fig.set_facecolor(palette.window().color().name())
+        self._ax.set_facecolor(palette.window().color().name())
         lo.addWidget(self._canvas, 0, 3, 8, 1)
         self._update_preview()
 
@@ -48,4 +56,7 @@ class PySide6TimestepDistributionWindowView(BaseTimestepDistributionWindowView, 
     def _update_preview(self):
         self._ax.cla()
         self._ax.hist(self._controller.generate_preview_data(), bins=1000, range=(0, 999))
+        for spine in self._ax.spines.values():
+            spine.set_color(self._text_color)
+        self._ax.tick_params(colors=self._text_color, which="both")
         self._canvas.draw()
