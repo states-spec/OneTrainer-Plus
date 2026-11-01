@@ -126,6 +126,11 @@ def style_tab_widget(tab_widget: QTabWidget):
     pages.setAutoFillBackground(True)
 
 
+def tab_page_color(palette: QPalette) -> QColor:
+    # the background of a tab page (see _TAB_PAGE_ROLE), e.g. for a plot drawn on one
+    return palette.color(_TAB_PAGE_ROLE)
+
+
 def _checkbox_indicator_style_sheet(size_at_default_font: int) -> str:
     # A checkbox indicator that is size_at_default_font pixels with the platform's default font size and grows and
     # shrinks with the text when the Font Size setting changes it: em is the line height of the application font in

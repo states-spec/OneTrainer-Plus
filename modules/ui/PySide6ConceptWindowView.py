@@ -3,12 +3,13 @@ import threading
 from modules.ui.BaseConceptWindowView import BaseConceptWindowView
 from modules.ui.ConceptWindowController import ConceptWindowController
 from modules.util.ui import pyside6_components
-from modules.util.ui.pyside6_util import style_tab_widget
+from modules.util.ui.pyside6_util import style_tab_widget, tab_page_color
 
 from matplotlib import pyplot as plt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+from matplotlib.figure import Figure
 from PIL.ImageQt import ImageQt
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -155,14 +156,16 @@ class PySide6ConceptWindowView(BaseConceptWindowView, QDialog):
         self.build_concept_stats_tab(stats_frame, controller)
 
         plt.set_loglevel('WARNING')
-        self.bucket_fig, self.bucket_ax = plt.subplots(figsize=(7, 3))
+        # a Figure of its own: for plt.subplots, pyplot made a hidden window (15 widgets) that plt.close left behind
+        self.bucket_fig = Figure(figsize=(7, 3))
+        self.bucket_ax = self.bucket_fig.add_subplot()
         self.canvas = NonZoomingFigureCanvas(self.bucket_fig)
         self.bucket_fig.tight_layout()
         self.bucket_fig.subplots_adjust(bottom=0.15)
 
         palette = self.palette()
         self.text_color = palette.text().color().name()
-        background_color = palette.window().color().name()
+        background_color = tab_page_color(palette).name()  # the plot is on the statistics tab's page
         self.bucket_fig.set_facecolor(background_color)
         self.bucket_ax.set_facecolor(background_color)
         self.bucket_ax.spines['bottom'].set_color(self.text_color)
@@ -185,6 +188,10 @@ class PySide6ConceptWindowView(BaseConceptWindowView, QDialog):
         #automatic concept scan
         self.scan_thread = threading.Thread(target=controller.auto_update_concept_stats, args=[self], daemon=True)
         self.scan_thread.start()
+
+        # every way of closing it emits finished; Escape (reject()) sends no closeEvent, so it skipped the cleanup
+        self.finished.connect(self._cleanup)
+        self.finished.connect(self._delete_when_scans_stopped)
 
 
     def _on_aug_toggle(self, checked: bool):
@@ -216,6 +223,15 @@ class PySide6ConceptWindowView(BaseConceptWindowView, QDialog):
         if self.bucket_fig is not None:
             plt.close(self.bucket_fig)
             self.bucket_fig = None
+
+    def _delete_when_scans_stopped(self):
+        # a parented QDialog is otherwise kept after exec() returns: ~250 widgets each time a concept was opened. Not
+        # before the stats scans have stopped (closing cancels them), because they report to this window's widgets
+        scans = (self.scan_thread, self.controller.scan_thread)
+        if any(scan is not None and scan.is_alive() for scan in scans):
+            QTimer.singleShot(100, self, self._delete_when_scans_stopped)
+        else:
+            self.deleteLater()
 
     def closeEvent(self, event):
         # also reached when the window is closed via the OS X button
