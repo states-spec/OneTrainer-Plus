@@ -425,7 +425,7 @@ class BaseConceptWindowView:
         sec = self.bucket_ax.secondary_xaxis(location=-0.1)
         sec.spines["bottom"].set_linewidth(0)
         sec.set_xticks([0, (len(aspects)-1)/2, len(aspects)-1], labels=["Wide", "Square", "Tall"])
-        sec.tick_params('x', length=0)
+        sec.tick_params('x', length=0, labelcolor=self.text_color)  # Wide/Square/Tall, matplotlib's black otherwise
         self.canvas.draw()
 
     def decimal_to_aspect_ratio(self, value : float):
