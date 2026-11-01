@@ -59,7 +59,7 @@ whose work it is built on are listed under [Credits](#credits).
 ## Installation
 
 > [!IMPORTANT]
-> Installing OneTrainer+ requires Python >=3.10 and <3.14.
+> Installing OneTrainer+ requires Python >=3.11 and <3.14.
 > You can download Python at https://www.python.org/downloads/windows/.
 > Then follow the below steps.
 
