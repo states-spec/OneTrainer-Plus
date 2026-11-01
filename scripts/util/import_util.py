@@ -38,6 +38,10 @@ def script_imports(allow_zluda: bool = True):
         logging.getLogger("diffusers.models.modeling_utils").addFilter(
             lambda record: 'Attention backends are an experimental feature' not in record.getMessage()
         )
+        # logged when diffusers.modular_pipelines is imported (AnimaModel's AnimaAutoBlocks), i.e. at every start
+        logging.getLogger("diffusers.modular_pipelines").addFilter(
+            lambda record: 'Modular Diffusers is currently an experimental feature' not in record.getMessage()
+        )
         logging.getLogger("transformers.modeling_utils").addFilter(
             lambda record: not re.search(
                 r"`loss_type=.*` was set in the config but it is unrecognized", record.getMessage()
