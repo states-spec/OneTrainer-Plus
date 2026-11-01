@@ -31,7 +31,7 @@ def _plain_implementation(value: Callable[[str], Any]) -> bool:
 
 
 # settings that only take effect together with another one: the optimizer windows grey them out while it is off.
-# Only where the setting provably has no effect then (adv_optm 2.5.13-2.5.16)
+# Only where the setting provably has no effect then (adv_optm 2.5.13-2.6.0)
 OPTION_DEPENDENCIES: dict[str, Callable[[Callable[[str], Any]], bool]] = {
     'nesterov_coef': lambda value: _on(value('nesterov')),
     'centered_wd_mode': lambda value: _number(value('centered_wd')) > 0,
@@ -42,6 +42,7 @@ OPTION_DEPENDENCIES: dict[str, Callable[[Callable[[str], Any]], bool]] = {
     'cautious_wd': _decays,
     'fisher_wd': _decays,
     'geometric_wd': _decays,
+    'scaled_wd': _decays,
     'fused_back_pass': _plain_implementation,
     'stochastic_rounding': _plain_implementation,
 }
@@ -186,6 +187,7 @@ class BaseOptimizerParamsWindowView:
             'snr_cond': {'title': 'SNR Preconditioning', 'tooltip': 'Variance/confidence preconditioning: scales each update by how consistent its gradient is. Requires Normed Momentum.', 'type': 'bool'},
             'stochastic_sign': {'title': 'Stochastic Sign', 'tooltip': 'Uses an adaptive stochastic sign operator with L-infinity preconditioning instead of the plain sign of the update.', 'type': 'bool'},
             'geometric_wd': {'title': 'Geometric Weight Decay', 'tooltip': 'Decays weights in dominant rows/columns more strongly and protects under-used ones, instead of a uniform weight decay.', 'type': 'bool'},
+            'scaled_wd': {'title': 'Scaled Weight Decay', 'tooltip': 'Scales the weight decay to each weight: a matrix gets it divided by its input width (an OFT block by half its block size), and vectors (DoRA magnitudes, biases) get no normal weight decay. It follows the learning rate schedule (the learning rate divided by its starting value; Prodigy: times its step size D) instead of being multiplied by the learning rate itself. Meant for much larger values than plain weight decay: adv_optm suggests starting at 0.1, together with Spectral Scaling.', 'type': 'bool'},
             'sinkhorn_iterations': {'title': 'Sinkhorn Iterations', 'tooltip': 'Number of Sinkhorn row/column normalization iterations applied to each update.', 'type': 'int'},
             'orthogonal_sinkhorn': {'title': 'Orthogonal Sinkhorn', 'tooltip': 'Uses the orthogonal variant of the Sinkhorn normalization.', 'type': 'bool'},
             'orthogonal_gradient': {'title': 'OrthoGrad', 'tooltip': 'Removes the gradient component parallel to the weight, which reduces overfitting and improves generalization. flattened: the original OrthoGrad over the whole tensor. iterative: a matrix-wise variant (adv_optm 2.5). disabled: off.', 'type': 'choice', 'values': ['disabled', 'flattened', 'iterative']},

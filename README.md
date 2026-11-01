@@ -18,8 +18,8 @@ whose work it is built on are listed under [Credits](#credits).
     VAE) runs on a correct kernel on RDNA3, and LARS works on bitsandbytes 0.49.2. `rocm_check` checks and measures a GPU
     setup ([docs/GpuCheck.md](docs/GpuCheck.md)); [docs/RocmVersionComparison.md](docs/RocmVersionComparison.md) compares
     PyTorch/ROCm builds.
--   **Optimizers**: Advanced_Optimizers (`adv_optm`) 2.5.16 and its 2.5 options, the parameter tags its optimizers
-    need, and resumes that keep Prodigy's step size.
+-   **Optimizers**: Advanced_Optimizers (`adv_optm`) 2.6.0 with its 2.5 and 2.6 options (Scaled Weight Decay among
+    them), the parameter tags its optimizers need, and resumes that keep Prodigy's step size.
 -   **Training options**: CIOP, CEP and Immiscible Diffusion noise, an exact OFT rotation (CANS), DoRA-OFT and OFT
     spectral norm clipping (all off by default), and stochastic rounding for bfloat16 EMA weights (on by default).
 -   **Cloud training** installs OneTrainer+ from this repository on the cloud machine (upstream's default installed
@@ -215,6 +215,8 @@ OneTrainer+ is built on the work of many people. Numbers such as #992 are pull r
     -   Hameer Abbasi: arena MemPools and disk streaming (#1732)
     -   CrunchyBanana1: the preset name in the top bar (#1592)
     -   Koratahiu: DoRA-OFT (#1335) and the `adv_optm` features (#1344)
+    -   Hameer Abbasi and Koratahiu: the dependency update to Pillow 13 and `adv_optm` 2.6.0, with scaled weight decay
+        and SinkSGD's OFT mode (#1756)
 
 ## License
 

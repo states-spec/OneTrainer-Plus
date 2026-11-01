@@ -284,6 +284,13 @@ def _feature_variants() -> list[tuple[str, dict, list[str], dict]]:
          [], {"round_trip": True}),
         ("LoRA with a bundled additional embedding", {"additional_embeddings": [_EMBEDDING]}, [],
          {**emb, "round_trip": True}),
+        # adv_optm's OFT mode only on the OFT group: the embedding's group would fail in the first step with it
+        ("SINKSGD_ADV on OFT with an additional embedding",
+         {"peft_type": "OFT_2", "oft_block_size": 8, "optimizer": {"optimizer": "SINKSGD_ADV"},
+          "additional_embeddings": [_EMBEDDING], "learning_rate": 1e-3}, [],
+         {**emb, "round_trip": True, "expect": "skew-symmetric Sinkhorn"}),
+        ("ADOPT_ADV with scaled weight decay",
+         {"optimizer": {"optimizer": "ADOPT_ADV", "weight_decay": 0.1, "scaled_wd": True}}, [], {}),
         ("embedding training", {"training_method": "EMBEDDING", "output_model_format": "SAFETENSORS",
                                 "embedding": _EMBEDDING, "learning_rate": 1e-2}, [], emb),
         ("fine-tune with an additional embedding", {"training_method": "FINE_TUNE", "output_model_format": "DIFFUSERS",

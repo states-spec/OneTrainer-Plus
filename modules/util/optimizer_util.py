@@ -30,7 +30,7 @@ _NONE_IS_A_SETTING = {
 
 
 def adv_state_precisions(optimizer: Optimizer) -> list[str]:
-    # the adv_optm state_precision modes that train with this optimizer. In adv_optm 2.5.13-2.5.16 "fp16" fails in
+    # the adv_optm state_precision modes that train with this optimizer. In adv_optm 2.5.13-2.6.0 "fp16" fails in
     # every optimizer except Adopt_adv (a dtype error, or NaN in Prodigy_adv). "factored" failed in AdaMuon_adv up to
     # 2.5.13 (original_shape unbound) and works since 2.5.16
     precisions = ["auto", "fp32", "factored", "bf16_sr", "int8_sr"]
@@ -491,6 +491,7 @@ OPTIMIZER_DEFAULT_PARAMETERS = {
         "normed_momentum": False,
         "spectral_normalization": False,
         "kourkoutas_beta": False,
+        "scaled_wd": False,
     },
     Optimizer.ADOPT_ADV: {
         "beta1": 0.9,
@@ -512,6 +513,7 @@ OPTIMIZER_DEFAULT_PARAMETERS = {
         "nesterov_coef": None,
         "spectral_normalization": False,
         "kourkoutas_beta": False,
+        "scaled_wd": False,
     },
     Optimizer.PRODIGY_ADV: {
         "beta1": 0.9,
@@ -538,6 +540,7 @@ OPTIMIZER_DEFAULT_PARAMETERS = {
         "orthogonal_gradient": "disabled",
         "spectral_normalization": False,
         "kourkoutas_beta": False,
+        "scaled_wd": False,
     },
     Optimizer.SIGNSGD_ADV: {
         "momentum": 0.95,
@@ -559,6 +562,7 @@ OPTIMIZER_DEFAULT_PARAMETERS = {
         "snr_cond": False,
         "stochastic_sign": False,
         "spectral_normalization": False,
+        "scaled_wd": False,
     },
     Optimizer.SINKSGD_ADV: {
         "momentum": 0.95,
@@ -580,6 +584,7 @@ OPTIMIZER_DEFAULT_PARAMETERS = {
         "normed_momentum": False,
         "snr_cond": False,
         "spectral_normalization": False,
+        "scaled_wd": False,
     },
     Optimizer.LION_ADV: {
         "beta1": 0.9,
@@ -596,6 +601,7 @@ OPTIMIZER_DEFAULT_PARAMETERS = {
         "auto_kappa_p": True,
         "stochastic_sign": False,
         "spectral_normalization": False,
+        "scaled_wd": False,
     },
     Optimizer.MUON_ADV: {
         "beta1": 0.9,
@@ -626,6 +632,7 @@ OPTIMIZER_DEFAULT_PARAMETERS = {
         "approx_mars": False,
         "spectral_normalization": False,
         "muon_adam_config": {},
+        "scaled_wd": False,
     },
     Optimizer.ADAMUON_ADV: {
         "beta1": 0.95,
@@ -659,6 +666,7 @@ OPTIMIZER_DEFAULT_PARAMETERS = {
         "approx_mars": False,
         "spectral_normalization": False,
         "muon_adam_config": {},
+        "scaled_wd": False,
     },
     Optimizer.ADABELIEF: {
         "beta1": 0.9,
