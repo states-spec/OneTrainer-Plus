@@ -3,6 +3,7 @@ import threading
 from modules.ui.BaseConceptWindowView import BaseConceptWindowView
 from modules.ui.ConceptWindowController import ConceptWindowController
 from modules.util.ui import pyside6_components
+from modules.util.ui.pyside6_util import style_tab_widget
 
 from matplotlib import pyplot as plt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
@@ -51,6 +52,7 @@ class PySide6ConceptWindowView(BaseConceptWindowView, QDialog):
         outer.setRowStretch(0, 1)
 
         tabs = QTabWidget(self)
+        style_tab_widget(tabs)
         outer.addWidget(tabs, 0, 0)
 
         _pad = pyside6_components.PAD

@@ -10,8 +10,17 @@ from modules.util.config.UISettingsConfig import UISettingsConfig
 from modules.util.enum.UITheme import UITheme
 
 from PySide6.QtCore import QCoreApplication, QEvent, Qt
-from PySide6.QtGui import QColor, QPalette
-from PySide6.QtWidgets import QApplication, QFileDialog, QProgressBar, QStyleFactory, QToolTip, QWidget
+from PySide6.QtGui import QColor, QFontMetrics, QPalette, qGray
+from PySide6.QtWidgets import (
+    QApplication,
+    QFileDialog,
+    QProgressBar,
+    QStackedWidget,
+    QStyleFactory,
+    QTabWidget,
+    QToolTip,
+    QWidget,
+)
 
 
 class QtABCMeta(type(QWidget), ABCMeta):
@@ -20,14 +29,11 @@ class QtABCMeta(type(QWidget), ABCMeta):
 
 
 # set once, at startup: changing the application style sheet makes Qt polish every widget again once per ancestor
-# (see _restyle_widgets), so nothing in it may depend on the theme or the font size
+# (see _restyle_widgets), so nothing in it may depend on the theme or the font size. The checkbox rule
+# (_checkbox_indicator_style_sheet) is added then.
 _STYLESHEET = """
     QLineEdit, QSpinBox, QDoubleSpinBox, QTextEdit, QPlainTextEdit {
         padding: 2px 2px;
-    }
-    QCheckBox::indicator {
-        width: 16px;
-        height: 16px;
     }
     QToolButton {
         padding-top: 0px;
@@ -46,9 +52,18 @@ _STYLESHEET = """
 # the trough of a progress bar, which depends on the theme, so each bar has it in its own style sheet
 _PROGRESS_BAR_STYLESHEET = "QProgressBar { background-color: %s; }"
 
-# the light look OneTrainer always had, captured in create_application; the font size the platform picked
+# The background of every tab page. Pages without one of their own (LoRA, settings) showed the tab widget's frame, which
+# Fusion paints lighter than the window in the dark theme, while scroll areas fill theirs with the window color. The
+# page area of each tab widget takes this role (style_tab_widget), and pages and the scroll areas in them inherit it:
+# the window color in the dark theme, the tab frame's color in the light one. Neither Fusion nor OneTrainer uses it
+# otherwise (it is the color of every other row in item views that alternate their row colors; none here do).
+_TAB_PAGE_ROLE = QPalette.ColorRole.AlternateBase
+
+# the light look OneTrainer always had, captured in create_application; the font size the platform picked and the
+# height of a line in it
 _light_palette: QPalette | None = None
 _default_font_point_size: float | None = None
+_default_line_height = 16
 _current_theme: UITheme | None = None
 _dark = False  # whether the dark palette is applied
 _requesting_color_scheme = False
@@ -68,7 +83,7 @@ def _dark_palette() -> QPalette:
             (QPalette.ColorRole.Window, window),
             (QPalette.ColorRole.WindowText, text),
             (QPalette.ColorRole.Base, base),
-            (QPalette.ColorRole.AlternateBase, button),
+            (_TAB_PAGE_ROLE, window),
             (QPalette.ColorRole.ToolTipBase, button),
             (QPalette.ColorRole.ToolTipText, text),
             (QPalette.ColorRole.PlaceholderText, disabled_text),
@@ -94,6 +109,29 @@ def _dark_palette() -> QPalette:
     palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Highlight, QColor(80, 80, 80))
     palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.HighlightedText, disabled_text)
     return palette
+
+
+def _tab_frame_color(palette: QPalette) -> QColor:
+    # the color Fusion fills a tab widget's frame with (QFusionStylePrivate::tabFrameColor, Qt 6.11)
+    color = palette.button().color()
+    color = color.lighter(100 + max(1, (180 - qGray(color.rgb())) // 6))
+    color.setHsv(color.hue(), int(color.saturation() * 0.75), color.value(), color.alpha())
+    return color.lighter(104)
+
+
+def style_tab_widget(tab_widget: QTabWidget):
+    # the same background on every page, see _TAB_PAGE_ROLE
+    pages = tab_widget.findChild(QStackedWidget, "qt_tabwidget_stackedwidget", Qt.FindChildOption.FindDirectChildrenOnly)
+    pages.setBackgroundRole(_TAB_PAGE_ROLE)
+    pages.setAutoFillBackground(True)
+
+
+def _checkbox_indicator_style_sheet(size_at_default_font: int) -> str:
+    # A checkbox indicator that is size_at_default_font pixels with the platform's default font size and grows and
+    # shrinks with the text when the Font Size setting changes it: em is the line height of the application font in
+    # Qt style sheets, recomputed when the widgets are polished again
+    size = f"{size_at_default_font / _default_line_height:.4f}em"
+    return f"QCheckBox::indicator {{ width: {size}; height: {size}; }}"
 
 
 def _is_dark(app: QApplication, theme: UITheme) -> bool:
@@ -133,7 +171,8 @@ def apply_theme(app: QApplication, theme: UITheme):
     app.setPalette(palette)
     QToolTip.setPalette(palette)
     if not app.styleSheet():
-        app.setStyleSheet(_STYLESHEET)  # at startup, before there are widgets
+        # at startup, before there are widgets
+        app.setStyleSheet(_STYLESHEET + _checkbox_indicator_style_sheet(16))
     _restyle_widgets(app)
 
 
@@ -199,7 +238,7 @@ def _gtk_based_desktop() -> bool:
 
 
 def create_application() -> QApplication:
-    global _light_palette, _default_font_point_size
+    global _light_palette, _default_font_point_size, _default_line_height
 
     # Restore the OS default SIGINT handler so Ctrl+C terminates the process
     # directly at the C level. Qt's event loop blocks inside C++, so Python's
@@ -247,7 +286,9 @@ def create_application() -> QApplication:
     _light_palette = QPalette(app.palette())
     _light_palette.setColor(QPalette.ColorRole.Base, QColor("white"))
     _light_palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Base, QColor("#e0e0e0"))
+    _light_palette.setColor(_TAB_PAGE_ROLE, _tab_frame_color(_light_palette))
     _default_font_point_size = app.font().pointSizeF()
+    _default_line_height = max(1, QFontMetrics(app.font()).height())
 
     apply_theme(app, settings.theme)
     apply_font_size(app, settings.font_size)
