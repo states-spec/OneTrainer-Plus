@@ -7,7 +7,7 @@ from modules.util.app_info import APP_NAME
 from modules.util.enum.PathIOType import PathIOType
 from modules.util.enum.TimeUnit import TimeUnit
 from modules.util.path_util import supported_image_extensions, supported_video_extensions
-from modules.util.ui.pyside6_util import file_dialog_options, format_tooltip
+from modules.util.ui.pyside6_util import file_dialog_options, format_tooltip, style_progress_bar
 from modules.util.ui.pyside6_validation import PySide6FieldValidator, PySide6PathValidator, PySide6RunNameValidator
 from modules.util.ui.UIState import BaseUIState
 
@@ -735,6 +735,7 @@ def switch(
 
 def progress(master: QWidget, row: int, column: int) -> QProgressBar:
     component = QProgressBar(master)
+    style_progress_bar(component)
     component.setRange(0, 1000)
     component.setValue(0)
     component.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -763,6 +764,7 @@ def double_progress(
     description_2_component = QLabel("", frame)
 
     for p in (progress_1_component, progress_2_component):
+        style_progress_bar(p)
         p.setRange(0, 1000)
         p.setValue(0)
         p.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)

@@ -9,9 +9,9 @@ from abc import ABCMeta
 from modules.util.config.UISettingsConfig import UISettingsConfig
 from modules.util.enum.UITheme import UITheme
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QCoreApplication, QEvent, Qt
 from PySide6.QtGui import QColor, QPalette
-from PySide6.QtWidgets import QApplication, QFileDialog, QStyleFactory, QToolTip, QWidget
+from PySide6.QtWidgets import QApplication, QFileDialog, QProgressBar, QStyleFactory, QToolTip, QWidget
 
 
 class QtABCMeta(type(QWidget), ABCMeta):
@@ -19,6 +19,8 @@ class QtABCMeta(type(QWidget), ABCMeta):
     pass
 
 
+# set once, at startup: changing the application style sheet makes Qt polish every widget again once per ancestor
+# (see _restyle_widgets), so nothing in it may depend on the theme or the font size
 _STYLESHEET = """
     QLineEdit, QSpinBox, QDoubleSpinBox, QTextEdit, QPlainTextEdit {
         padding: 2px 2px;
@@ -26,9 +28,6 @@ _STYLESHEET = """
     QCheckBox::indicator {
         width: 16px;
         height: 16px;
-    }
-    QProgressBar {
-        background-color: %(progress_background)s;
     }
     QToolButton {
         padding-top: 0px;
@@ -44,10 +43,15 @@ _STYLESHEET = """
     }
 """
 
+# the trough of a progress bar, which depends on the theme, so each bar has it in its own style sheet
+_PROGRESS_BAR_STYLESHEET = "QProgressBar { background-color: %s; }"
+
 # the light look OneTrainer always had, captured in create_application; the font size the platform picked
 _light_palette: QPalette | None = None
 _default_font_point_size: float | None = None
 _current_theme: UITheme | None = None
+_dark = False  # whether the dark palette is applied
+_requesting_color_scheme = False
 _system_file_dialogs = False
 
 
@@ -111,20 +115,26 @@ def is_dark_theme() -> bool:
 
 
 def apply_theme(app: QApplication, theme: UITheme):
-    global _current_theme
+    global _current_theme, _dark, _requesting_color_scheme
     _current_theme = theme
 
     # also tells the platform, e.g. for a dark title bar on Windows
-    if theme == UITheme.SYSTEM:
-        app.styleHints().unsetColorScheme()
-    else:
-        app.styleHints().setColorScheme(Qt.ColorScheme.Dark if theme == UITheme.DARK else Qt.ColorScheme.Light)
+    _requesting_color_scheme = True
+    try:
+        if theme == UITheme.SYSTEM:
+            app.styleHints().unsetColorScheme()
+        else:
+            app.styleHints().setColorScheme(Qt.ColorScheme.Dark if theme == UITheme.DARK else Qt.ColorScheme.Light)
+    finally:
+        _requesting_color_scheme = False
 
-    dark = _is_dark(app, theme)
-    palette = _dark_palette() if dark else QPalette(_light_palette)
+    _dark = _is_dark(app, theme)
+    palette = _dark_palette() if _dark else QPalette(_light_palette)
     app.setPalette(palette)
     QToolTip.setPalette(palette)
-    app.setStyleSheet(_STYLESHEET % {"progress_background": "#505050" if dark else "#c8c8c8"})
+    if not app.styleSheet():
+        app.setStyleSheet(_STYLESHEET)  # at startup, before there are widgets
+    _restyle_widgets(app)
 
 
 def apply_font_size(app: QApplication, point_size: int):
@@ -132,8 +142,36 @@ def apply_font_size(app: QApplication, point_size: int):
     font.setPointSizeF(point_size if point_size > 0 else _default_font_point_size)
     if font != app.font():
         app.setFont(font)
-        # widgets already polished by the application stylesheet keep their old font until it is set again
-        app.setStyleSheet(app.styleSheet())
+        _restyle_widgets(app)
+
+
+def style_progress_bar(bar: QProgressBar):
+    # every QProgressBar goes through this when it is created; theme changes call it again
+    style_sheet = _PROGRESS_BAR_STYLESHEET % ("#505050" if _dark else "#c8c8c8")
+    if bar.styleSheet() != style_sheet:
+        bar.setStyleSheet(style_sheet)
+
+
+def _restyle_widgets(app: QApplication):
+    # A widget polished by the application style sheet keeps the palette and font it had then, so a new palette or
+    # font only shows after every widget is polished again. Setting the style sheet again does that, but Qt
+    # (QStyleSheetStyle::repolish) polishes the subtree of every widget it lists, and it lists them all: each widget
+    # is polished once per ancestor, 0.5 s for the main window with a dozen concepts and 1.5-1.8 s with 150 (3000
+    # widgets). Here each widget is polished once, parents first (a widget takes its font and palette from its
+    # parent then), and gets the StyleChange event after its children (a scroll area sizes its contents then, also
+    # in a hidden tab): the same fonts, palettes, sizes and pixels in a fraction of the time.
+    polished = []
+    stack = [widget for widget in app.topLevelWidgets() if widget.parentWidget() is None]
+    while stack:
+        widget = stack.pop()
+        if isinstance(widget, QProgressBar):
+            style_progress_bar(widget)
+        widget.style().polish(widget)
+        polished.append(widget)
+        stack.extend(widget.findChildren(QWidget, options=Qt.FindChildOption.FindDirectChildrenOnly))
+    style_change = QEvent(QEvent.Type.StyleChange)
+    for widget in reversed(polished):
+        QCoreApplication.sendEvent(widget, style_change)
 
 
 def apply_ui_settings(settings: UISettingsConfig):
@@ -147,8 +185,11 @@ def apply_ui_settings(settings: UISettingsConfig):
 
 
 def _on_color_scheme_changed(_scheme):
-    if _current_theme == UITheme.SYSTEM:
-        apply_theme(QApplication.instance(), UITheme.SYSTEM)
+    # the OS switched between light and dark. Also emitted while apply_theme requests a scheme from the platform,
+    # which applies the palette itself, and then nothing changes here
+    app = QApplication.instance()
+    if _current_theme == UITheme.SYSTEM and not _requesting_color_scheme and _is_dark(app, UITheme.SYSTEM) != _dark:
+        apply_theme(app, UITheme.SYSTEM)
 
 
 def _gtk_based_desktop() -> bool:

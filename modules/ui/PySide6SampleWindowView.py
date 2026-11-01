@@ -9,6 +9,7 @@ from modules.ui.SampleFrameController import SampleFrameController
 from modules.ui.SampleWindowController import SampleWindowController
 from modules.util.enum.FileType import FileType
 from modules.util.ui import pyside6_components
+from modules.util.ui.pyside6_util import style_progress_bar
 from modules.util.ui.PySide6UIState import PySide6UIState
 
 from PIL.ImageQt import ImageQt
@@ -51,6 +52,7 @@ class PySide6SampleWindowView(BaseSampleWindowView, QDialog):
         outer.addWidget(self._image_label, 1, 1, 3, 1)
 
         self._progress = QProgressBar(self)
+        style_progress_bar(self._progress)
         self._progress.setRange(0, 1000)
         outer.addWidget(self._progress, 2, 0)
 
