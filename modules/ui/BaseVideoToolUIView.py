@@ -1,5 +1,6 @@
-import webbrowser
 from abc import ABC, abstractmethod
+
+from modules.util.ui.browser_util import open_url
 
 
 class BaseVideoToolUIView(ABC):
@@ -151,7 +152,7 @@ class BaseVideoToolUIView(ABC):
                             Default args will hide most terminal outputs.")
         self._create_textbox(frame, 3, 1, 220, 90, ui_state, "download_args")
         self.components.button(frame, 3, 2, "yt-dlp info",
-                          command=lambda: webbrowser.open("https://github.com/yt-dlp/yt-dlp?tab=readme-ov-file#usage-and-options", new=0, autoraise=False))
+                          command=lambda: open_url("https://github.com/yt-dlp/yt-dlp?tab=readme-ov-file#usage-and-options"))
 
     @abstractmethod
     def _create_textbox(self, master, row, col, width, height, ui_state, var_name):

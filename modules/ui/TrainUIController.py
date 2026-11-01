@@ -6,7 +6,6 @@ import subprocess
 import threading
 import time
 import traceback
-import webbrowser
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -29,6 +28,7 @@ from modules.util.profiling_util import PeakMemoryRecorder
 from modules.util.tensorboard_util import TensorboardProcess
 from modules.util.torch_util import print_fragmentation, torch_gc
 from modules.util.TrainProgress import TrainProgress
+from modules.util.ui.browser_util import open_url
 from modules.util.ui.validation import flush_and_validate_all
 
 import torch
@@ -158,7 +158,7 @@ class TrainUIController:
                 self._stop_always_on_tensorboard()
 
     def open_tensorboard(self):
-        webbrowser.open("http://localhost:" + str(self.train_config.tensorboard_port), new=0, autoraise=False)
+        open_url("http://localhost:" + str(self.train_config.tensorboard_port))
 
     def open_dataset_tool(self, parent, view_cls):
         return CaptionUIController(None, False).create_window(parent, view_cls)

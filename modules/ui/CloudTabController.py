@@ -1,8 +1,7 @@
 
-import webbrowser
-
 from modules.util.config.TrainConfig import TrainConfig
 from modules.util.enum.CloudType import CloudType
+from modules.util.ui.browser_util import open_url
 
 
 class CloudTabController:
@@ -32,4 +31,4 @@ class CloudTabController:
 
     def open_create_cloud_url(self):
         if self.config.cloud.type == CloudType.RUNPOD:
-            webbrowser.open("https://www.runpod.io/console/deploy?template=1a33vbssq9&type=gpu", new=0, autoraise=False)
+            open_url("https://www.runpod.io/console/deploy?template=1a33vbssq9&type=gpu")
