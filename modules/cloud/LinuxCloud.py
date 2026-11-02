@@ -1,9 +1,8 @@
-import pickle
 import shlex
 import threading
-import time
 from pathlib import Path
 
+from modules.cloud import cloud_messages
 from modules.cloud.BaseCloud import BaseCloud
 from modules.cloud.FabricFileSync import FabricFileSync
 from modules.cloud.NativeSCPFileSync import NativeSCPFileSync
@@ -206,33 +205,27 @@ class LinuxCloud(BaseCloud):
         #
         #use 'rename' as the atomic operation, to avoid race conditions between reader and writer:
 
-        file=f'{shlex.quote(self.callback_file)}'
-        cmd=f'mv "{file}" "{file}.read" \
-           && cat "{file}.read" \
-           && rm "{file}.read"'
+        file=shlex.quote(self.callback_file)
+        cmd=f'mv {file} {file}.read \
+           && cat {file}.read \
+           && rm {file}.read'
 
         self.callback_connection.open()
         in_file,out_file,err_file=self.callback_connection.client.exec_command(cmd)
 
         try:
-            while True:
-                try:
-                    while not out_file.channel.recv_ready() and not out_file.channel.exit_status_ready():
-                        #even though reading from out_file is blocking, it doesn't block if there
-                        #is *no* data available yet, which results in an unpickling error.
-                        #wait until there is at least some data before reading:
-                        time.sleep(0.1)
-                    name=pickle.load(out_file)
-                except EOFError:
-                    return
-                params=pickle.load(out_file)
-
-                fun=getattr(callbacks,name)
-                fun(*params)
+            #JSON lines (cloud_messages), never unpickled: the cloud machine can't run code here
+            data=out_file.read(cloud_messages.MAX_CALLBACK_BYTES + 1)
         finally:
             in_file.close()
             out_file.close()
             err_file.close()
+
+        if len(data) > cloud_messages.MAX_CALLBACK_BYTES:
+            print(f"Ignored the cloud machine's callback file: more than {cloud_messages.MAX_CALLBACK_BYTES} bytes")
+            return
+        for name,args in cloud_messages.decode_callbacks(data):
+            getattr(callbacks,name)(*args)
 
 
     def send_commands(self,commands : TrainCommands):
@@ -243,7 +236,7 @@ class LinuxCloud(BaseCloud):
                 && cat > {shlex.quote(self.command_pipe)}'
             )
             try:
-                pickle.dump(commands,in_file)
+                in_file.write(cloud_messages.encode_commands(commands))
                 in_file.flush()
                 in_file.channel.shutdown_write()
             finally:
