@@ -1,5 +1,6 @@
 import json
 import os.path
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -39,10 +40,29 @@ def diagnostics_path(*parts: str) -> str:
     return os.path.join(DIAGNOSTICS_DIR, *parts)
 
 
-def write_json_atomic(path: str, obj: Any):
-    with open(path + ".write", "w", encoding="utf-8") as f:
-        json.dump(obj, f, indent=4)
+def write_json_atomic(path: str, obj: Any, private: bool = False):
+    if private:
+        # readable only by its owner from the moment it exists (secrets.json). os.open's mode applies only to a new
+        # file, so a temp file left by an earlier failed write goes first.
+        with suppress(FileNotFoundError):
+            os.remove(path + ".write")
+        with os.fdopen(os.open(path + ".write", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w",
+                       encoding="utf-8") as f:
+            json.dump(obj, f, indent=4)
+    else:
+        with open(path + ".write", "w", encoding="utf-8") as f:
+            json.dump(obj, f, indent=4)
     os.replace(path + ".write", path)
+
+
+def restrict_to_owner(path: str):
+    """Takes group and other access off an existing file: secrets.json used to be created readable by everyone."""
+    if os.name != "posix":
+        return
+    with suppress(OSError):
+        mode = os.stat(path).st_mode & 0o777
+        if mode & 0o077:
+            os.chmod(path, mode & 0o700)
 
 
 SUPPORTED_IMAGE_EXTENSIONS = {'.bmp', '.jpg', '.jpeg', '.png', '.tif', '.tiff', '.webp', '.avif'}

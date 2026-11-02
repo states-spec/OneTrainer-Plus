@@ -1,4 +1,5 @@
 import ctypes
+import hashlib
 import os
 import platform
 import shutil
@@ -6,6 +7,11 @@ import urllib.request
 import zipfile
 
 RELEASE = f"rel.{os.environ.get('ZLUDA_HASH', '11cc5844514f93161e0e74387f04e2c537705a82')}"
+# SHA-256 of each known release's ZLUDA-windows-amd64.zip. Its DLLs are loaded into OneTrainer+'s process, and the
+# files of a GitHub release can be replaced after it was published. Another release (ZLUDA_HASH) needs ZLUDA_SHA256.
+RELEASE_SHA256 = {
+    "rel.11cc5844514f93161e0e74387f04e2c537705a82": "7a1731725f0300b7ecf17b9ac07854c986488428f6c619e0d535e564fc267799",
+}
 DLL_MAPPING = {
     'cublas.dll': 'cublas64_11.dll',
     'cusparse.dll': 'cusparse64_11.dll',
@@ -35,6 +41,18 @@ def install(zluda_path: os.PathLike) -> None:
         return
 
     urllib.request.urlretrieve(f'https://github.com/lshqqytiger/ZLUDA/releases/download/{RELEASE}/ZLUDA-windows-amd64.zip', '_zluda')
+    expected = os.environ.get('ZLUDA_SHA256', RELEASE_SHA256.get(RELEASE, '')).strip().lower()
+    sha256 = hashlib.sha256()
+    with open('_zluda', 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            sha256.update(chunk)
+    if sha256.hexdigest() != expected:
+        os.remove('_zluda')
+        if not expected:
+            raise RuntimeError(f'No SHA-256 is known for ZLUDA {RELEASE}: set ZLUDA_SHA256 to the checksum of its '
+                               f'ZLUDA-windows-amd64.zip')
+        raise RuntimeError(f'The ZLUDA {RELEASE} download has the SHA-256 {sha256.hexdigest()} instead of {expected}: '
+                           f'it was not installed')
     with zipfile.ZipFile('_zluda', 'r') as archive:
         infos = archive.infolist()
         for info in infos:

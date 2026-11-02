@@ -218,10 +218,12 @@ class Utility:
         if not path:
             return path
 
+        # anywhere in the text, not only at its start ("HIP runtime loaded from: /home/<user>/..." kept the name), but
+        # not inside a longer path or a URL. Windows user folders can contain spaces, so they end at the next backslash.
         patterns = [
-            (r"(?i)^([A-Z]:\\Users)\\[^\\]+", r"\1\\anonymous"),  # Windows
-            (r"(?i)^/home/[^/]+", r"/home/anonymous"),  # Linux
-            (r"(?i)^/Users/[^/]+", r"/Users/anonymous"),  # macOS
+            (r"(?i)(?<![\w\\/])([A-Z]:\\Users)\\[^\\\r\n\"']+", r"\1\\anonymous"),  # Windows
+            (r"(?i)(?<![\w./-])/home/[^/\s\"']+", r"/home/anonymous"),  # Linux
+            (r"(?i)(?<![\w./-])/Users/[^/\s\"']+", r"/Users/anonymous"),  # macOS
         ]
 
         for pattern, replacement in patterns:

@@ -7,8 +7,16 @@ from modules.util.enum.CloudAction import CloudAction
 
 import runpod
 
+# The pod's image: upstream OneTrainer's cloud image (runpod/pytorch with OneTrainer; OneTrainer+ installs itself into
+# /workspace on top of it), pinned to the digest its "latest" tag had on 2026-11-02. Whoever controls the Docker Hub
+# account can point a tag at another image, but not a digest.
+_IMAGE = "dxqbyd/runpod-onetrainer-cli@sha256:f4f7c69a5cfdfda3dd38ddac704e3a70c614eb9287c5768cae094212a469abbd"
+
 
 class RunpodCloud(LinuxCloud):
+    #a new pod has a new key: pin the first one for the rest of the run (see ssh_host_keys)
+    TRUST_FIRST_HOST_KEY=True
+
     def __init__(self, config: TrainConfig):
         super().__init__(config)
 
@@ -68,8 +76,9 @@ class RunpodCloud(LinuxCloud):
         secrets=self.config.secrets.cloud
         pod=runpod.create_pod(
             name=config.name,
-            image_name="dxqbyd/runpod-onetrainer-cli:latest",
-            template_id="1a33vbssq9",
+            image_name=_IMAGE,
+            #only SSH is reachable from outside (a RunPod template used to set the ports, and could change them)
+            ports="22/tcp",
             gpu_type_id=config.gpu_type,
             cloud_type=config.sub_type,
             support_public_ip=True,

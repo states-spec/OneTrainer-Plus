@@ -1,12 +1,15 @@
-import pickle
+import io
 import shlex
 import threading
-import time
+from contextlib import suppress
 from pathlib import Path
 
+from modules.cloud import cloud_messages
 from modules.cloud.BaseCloud import BaseCloud
 from modules.cloud.FabricFileSync import FabricFileSync
 from modules.cloud.NativeSCPFileSync import NativeSCPFileSync
+from modules.cloud.ssh_host_keys import HostKeys
+from modules.util import git_util
 from modules.util.app_info import APP_NAME
 from modules.util.callbacks.TrainCallbacks import TrainCallbacks
 from modules.util.commands.TrainCommands import TrainCommands
@@ -19,12 +22,16 @@ import fabric
 
 
 class LinuxCloud(BaseCloud):
+    #a Linux cloud is a server you know: its key has to be in ~/.ssh/known_hosts (see ssh_host_keys)
+    TRUST_FIRST_HOST_KEY=False
+
     def __init__(self, config: TrainConfig):
         super().__init__(config)
         self.connection=None
         self.callback_connection=None
         self.command_connection=None
         self.tensorboard_tunnel_stop=None
+        self.host_keys=HostKeys(trust_first_key=self.TRUST_FIRST_HOST_KEY)
 
         name=config.cloud.run_id if config.cloud.detach_trainer else get_string_timestamp()
         self.callback_file=f'{config.cloud.remote_dir}/{name}.callback'
@@ -33,6 +40,7 @@ class LinuxCloud(BaseCloud):
         self.exit_status_file=f'{config.cloud.remote_dir}/{name}.exit'
         self.log_file=f'{config.cloud.remote_dir}/{name}.log'
         self.pid_file=f'{config.cloud.remote_dir}/{name}.pid'
+        self.token_file=f'{config.cloud.remote_dir}/{name}.token'
 
     def _connect(self):
         if self.connection:
@@ -46,31 +54,24 @@ class LinuxCloud(BaseCloud):
             raise ValueError('Host and port required for SSH connection')
 
         try:
-            self.connection=fabric.Connection(host=secrets.host,
-                                             port=secrets.port,
-                                             user=secrets.user,
-                                             connect_kwargs=connect_kwargs)
+            self.connection=self.host_keys.connection(secrets.host,secrets.port,secrets.user,connect_kwargs)
             self.connection.open()
+            #RunPod: every later connection of this run has to present the key this one did
+            self.host_keys.pin(self.connection)
             self.connection.transport.set_keepalive(30)
 
-            self.callback_connection=fabric.Connection(host=secrets.host,
-                                                       port=secrets.port,
-                                                       user=secrets.user,
-                                                       connect_kwargs=connect_kwargs)
+            self.callback_connection=self.host_keys.connection(secrets.host,secrets.port,secrets.user,connect_kwargs)
 
-            self.command_connection=fabric.Connection(host=secrets.host,
-                                                      port=secrets.port,
-                                                      user=secrets.user,
-                                                      connect_kwargs=connect_kwargs)
+            self.command_connection=self.host_keys.connection(secrets.host,secrets.port,secrets.user,connect_kwargs)
             #the command connection isn't used for long periods of time; prevent remote from closing it:
             self.command_connection.open()
             self.command_connection.transport.set_keepalive(30)
 
             match config.file_sync:
                 case CloudFileSync.NATIVE_SCP:
-                    self.file_sync=NativeSCPFileSync(config,secrets)
+                    self.file_sync=NativeSCPFileSync(config,secrets,self.host_keys)
                 case CloudFileSync.FABRIC_SFTP:
-                    self.file_sync=FabricFileSync(config,secrets)
+                    self.file_sync=FabricFileSync(config,secrets,self.host_keys)
 
         except Exception:
             if self.connection:
@@ -111,13 +112,41 @@ class LinuxCloud(BaseCloud):
                    && export OT_LAZY_UPDATES=true \
                    && cd {shlex.quote(config.onetrainer_dir)}"
 
-        if result.exited == 0:
-            if update:
-                # updating can switch a dependency's git remote (e.g. a different fork/branch),
-                # which makes pip prompt interactively unless told to always wipe and re-clone.
-                self.connection.run(cmd_env + "&& export PIP_EXISTS_ACTION=w && ./update.sh", in_stream=False)
+        installed=result.exited == 0
+        if installed and not update:
+            return
+        pinned=self.__checkout_local_commit()
+        if installed:
+            # updating can switch a dependency's git remote (e.g. a different fork/branch),
+            # which makes pip prompt interactively unless told to always wipe and re-clone.
+            # With the commit checked out, update.sh only updates the requirements (no git pull).
+            skip_pull=" && export OT_UPDATE_SKIP_GIT_PULL=true" if pinned else ""
+            self.connection.run(cmd_env + f"&& export PIP_EXISTS_ACTION=w{skip_pull} && ./update.sh", in_stream=False)
         else:
             self.connection.run(cmd_env + "&& ./install.sh", in_stream=False)
+
+    def __checkout_local_commit(self) -> bool:
+        #The cloud machine runs the commit this PC runs, if its repository has it: the same code on both ends
+        #(config format, cloud messages), and not whatever its branch got since. Otherwise it stays on the newest
+        #commit of its branch, as before.
+        commit=git_util.get_git_commit()
+        if commit is None:
+            return False
+        onetrainer_dir=shlex.quote(self.config.cloud.onetrainer_dir)
+        result=self.connection.run(f"git -C {onetrainer_dir} fetch --quiet origin {commit} \
+                                     && git -C {onetrainer_dir} checkout --quiet --detach {commit}",
+                                   warn=True,in_stream=False)
+        if result.exited == 0:
+            uncommitted=" (this PC's uncommitted changes don't go along)" if git_util.has_uncommitted_changes() else ""
+            print(f"Cloud: running {APP_NAME} at this PC's commit {commit[:10]}{uncommitted}")
+            return True
+        print(f"Cloud: the cloud machine's repository doesn't have this PC's commit {commit[:10]} (not pushed?), "
+              f"so it runs the newest commit of its branch")
+        #an earlier run may have left a detached HEAD, which git pull (update.sh) refuses
+        self.connection.run(f"git -C {onetrainer_dir} checkout --quiet \
+                              \"$(git -C {onetrainer_dir} rev-parse --abbrev-ref origin/HEAD | sed 's|^origin/||')\"",
+                            warn=True,in_stream=False)
+        return False
 
     def _make_tensorboard_tunnel(self):
         self.tensorboard_tunnel_stop=threading.Event()
@@ -144,9 +173,10 @@ class LinuxCloud(BaseCloud):
         if self.connection:
             self.connection.close()
             self.connection=None
+        self.host_keys.close()
 
     def can_reattach(self):
-        result=self.connection.run(f"test -f {self.pid_file}",warn=True,in_stream=False)
+        result=self.connection.run(f"test -f {shlex.quote(self.pid_file)}",warn=True,in_stream=False)
         return result.exited == 0
 
     def _get_action_cmd(self,action : CloudAction):
@@ -165,36 +195,54 @@ class LinuxCloud(BaseCloud):
              && export OT_LAZY_UPDATES=true"
 
         if self.config.secrets.huggingface_token != "":
-            cmd+=f" && export HF_TOKEN={self.config.secrets.huggingface_token}"
+            #the token goes over the SSH channel's input into a file only its owner can read, which the trainer's
+            #command reads and deletes first. In the command line it was in the cloud machine's process list for the
+            #whole run, and in the error message of every failed cloud run.
+            token_file=shlex.quote(self.token_file)
+            self.connection.run(f"(umask 077 && cat > {token_file})",hide=True,
+                                in_stream=io.StringIO(self.config.secrets.huggingface_token))
+            cmd+=f" && {{ HF_TOKEN=$(cat {token_file}); rm -f {token_file}; export HF_TOKEN; }}"
         if config.huggingface_cache_dir != "":
-            cmd+=f" && export HF_HOME={config.huggingface_cache_dir}"
+            #quoted, but a leading ~/ still means the remote home, as it did unquoted
+            hf_home=config.huggingface_cache_dir
+            hf_home='"$HOME"/'+shlex.quote(hf_home[2:]) if hf_home.startswith("~/") else shlex.quote(hf_home)
+            cmd+=f" && export HF_HOME={hf_home}"
 
-        cmd+=f' && {config.onetrainer_dir}/run-cmd.sh train_remote --config-path={shlex.quote(self.config_file)} \
+        cmd+=f' && {shlex.quote(config.onetrainer_dir + "/run-cmd.sh")} train_remote --config-path={shlex.quote(self.config_file)} \
                                                                    --callback-path={shlex.quote(self.callback_file)} \
                                                                    --command-path={shlex.quote(self.command_pipe)}'
 
-        if config.detach_trainer:
-            self.connection.run(f'rm -f {self.exit_status_file}',in_stream=False)
+        try:
+            if config.detach_trainer:
+                exit_status_file=shlex.quote(self.exit_status_file)
+                self.connection.run(f'rm -f {exit_status_file}',in_stream=False)
 
-            cmd=f"({cmd} ; exit_status=$? ; echo $exit_status > {self.exit_status_file}; exit $exit_status)"
+                cmd=f"({cmd} ; exit_status=$? ; echo $exit_status > {exit_status_file}; exit $exit_status)"
 
-            #if the callback file still exists 10 seconds after the trainer has exited, the client must be detached, because the clients reads and deletes this file:
-            cmd+=f" && (sleep 10 && test -f {shlex.quote(self.callback_file)} && {self._get_action_cmd(config.on_detached_finish)} || true) \
-                    || (sleep 10 && test -f {shlex.quote(self.callback_file)} && {self._get_action_cmd(config.on_detached_error)})"
+                #if the callback file still exists 10 seconds after the trainer has exited, the client must be detached, because the clients reads and deletes this file:
+                cmd+=f" && (sleep 10 && test -f {shlex.quote(self.callback_file)} && {self._get_action_cmd(config.on_detached_finish)} || true) \
+                        || (sleep 10 && test -f {shlex.quote(self.callback_file)} && {self._get_action_cmd(config.on_detached_error)})"
 
-            cmd=f'(nohup true && {cmd}) > {self.log_file} 2>&1 & echo $! > {self.pid_file}'
-            self.connection.run(cmd,disown=True)
-            self.__trail_detached_trainer()
-        else:
-            self.connection.run(cmd,in_stream=False)
+                cmd=f'(nohup true && {cmd}) > {shlex.quote(self.log_file)} 2>&1 & echo $! > {shlex.quote(self.pid_file)}'
+                self.connection.run(cmd,disown=True)
+                self.__trail_detached_trainer()
+            else:
+                self.connection.run(cmd,in_stream=False)
+        finally:
+            #the trainer's command deletes the token file when it starts; this covers a command that failed before that
+            if self.config.secrets.huggingface_token != "":
+                with suppress(Exception):
+                    self.connection.run(f"rm -f {shlex.quote(self.token_file)}",warn=True,hide=True,in_stream=False)
 
     def __trail_detached_trainer(self):
-        cmd=f'tail -f {self.log_file} --pid $(<{self.pid_file})'
+        log_file=shlex.quote(self.log_file)
+        pid_file=shlex.quote(self.pid_file)
+        cmd=f'tail -f {log_file} --pid $(<{pid_file})'
         self.connection.run(cmd,in_stream=False)
         #trainer has exited, don't reattach:
-        self.connection.run(f'rm -f {self.pid_file}',in_stream=False)
+        self.connection.run(f'rm -f {pid_file}',in_stream=False)
         #raise an exception if the training process return an exit code != 0:
-        self.connection.run(f'exit $(<{self.exit_status_file})',in_stream=False)
+        self.connection.run(f'exit $(<{shlex.quote(self.exit_status_file)})',in_stream=False)
 
 
 
@@ -206,33 +254,27 @@ class LinuxCloud(BaseCloud):
         #
         #use 'rename' as the atomic operation, to avoid race conditions between reader and writer:
 
-        file=f'{shlex.quote(self.callback_file)}'
-        cmd=f'mv "{file}" "{file}.read" \
-           && cat "{file}.read" \
-           && rm "{file}.read"'
+        file=shlex.quote(self.callback_file)
+        cmd=f'mv {file} {file}.read \
+           && cat {file}.read \
+           && rm {file}.read'
 
         self.callback_connection.open()
         in_file,out_file,err_file=self.callback_connection.client.exec_command(cmd)
 
         try:
-            while True:
-                try:
-                    while not out_file.channel.recv_ready() and not out_file.channel.exit_status_ready():
-                        #even though reading from out_file is blocking, it doesn't block if there
-                        #is *no* data available yet, which results in an unpickling error.
-                        #wait until there is at least some data before reading:
-                        time.sleep(0.1)
-                    name=pickle.load(out_file)
-                except EOFError:
-                    return
-                params=pickle.load(out_file)
-
-                fun=getattr(callbacks,name)
-                fun(*params)
+            #JSON lines (cloud_messages), never unpickled: the cloud machine can't run code here
+            data=out_file.read(cloud_messages.MAX_CALLBACK_BYTES + 1)
         finally:
             in_file.close()
             out_file.close()
             err_file.close()
+
+        if len(data) > cloud_messages.MAX_CALLBACK_BYTES:
+            print(f"Ignored the cloud machine's callback file: more than {cloud_messages.MAX_CALLBACK_BYTES} bytes")
+            return
+        for name,args in cloud_messages.decode_callbacks(data):
+            getattr(callbacks,name)(*args)
 
 
     def send_commands(self,commands : TrainCommands):
@@ -243,7 +285,7 @@ class LinuxCloud(BaseCloud):
                 && cat > {shlex.quote(self.command_pipe)}'
             )
             try:
-                pickle.dump(commands,in_file)
+                in_file.write(cloud_messages.encode_commands(commands))
                 in_file.flush()
                 in_file.channel.shutdown_write()
             finally:

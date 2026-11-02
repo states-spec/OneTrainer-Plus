@@ -77,6 +77,16 @@ class TrainCommands:
         self.__save_command = False
         return save_command
 
+    def to_dict(self) -> dict:
+        # the pending commands as plain data, for the cloud command channel (cloud_messages); nothing is reset
+        return {
+            "stop": self.__stop_command,
+            "sample_custom": [sample.to_dict() for sample in self.__sample_custom_commands],
+            "sample_default": self.__sample_default_command,
+            "backup": self.__backup_command,
+            "save": self.__save_command,
+        }
+
     def merge(self, other):
         if other.get_stop_command():
             self.stop()

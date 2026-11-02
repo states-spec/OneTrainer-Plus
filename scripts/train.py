@@ -3,6 +3,7 @@ from util.import_util import script_imports
 script_imports()
 
 import json
+import sys
 
 from modules.util import create
 from modules.util.args.TrainArgs import TrainArgs
@@ -11,6 +12,7 @@ from modules.util.commands.TrainCommands import TrainCommands
 from modules.util.config.SecretsConfig import SecretsConfig
 from modules.util.config.TrainConfig import TrainConfig, prepare_run_name
 from modules.util.optimizer_util import default_optimizer_config
+from modules.util.path_util import restrict_to_owner
 
 
 def load_config(args: TrainArgs, train_config: TrainConfig) -> TrainConfig:
@@ -55,13 +57,24 @@ def main():
     train_config.run_name = prepare_run_name(
         train_config.training_method, train_config.run_name_mode, train_config.run_name, is_new_invocation=True)
 
+    secrets_path = "secrets.json" if args.secrets_path is None else args.secrets_path
+    restrict_to_owner(secrets_path)
     try:
-        with open("secrets.json" if args.secrets_path is None else args.secrets_path, "r", encoding="utf-8") as f:
+        with open(secrets_path, "r", encoding="utf-8") as f:
             secrets_dict=json.load(f)
             train_config.secrets = SecretsConfig.default_values().from_dict(secrets_dict)
     except FileNotFoundError:
         if args.secrets_path is not None:
             raise
+
+    # a config file brings its cloud settings (install command, GPU, end actions) to the saved cloud login
+    if train_config.cloud.enabled:
+        print("This training runs on a cloud machine, with your saved cloud login:\n"
+              + train_config.cloud.describe_run(train_config.secrets.cloud))
+        if sys.stdin is not None and sys.stdin.isatty() \
+                and input("Start it? [y/N] ").strip().lower() not in ("y", "yes"):
+            print("Not started.")
+            return
 
     trainer = create.create_trainer(train_config, callbacks, commands)
 

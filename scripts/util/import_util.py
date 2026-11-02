@@ -61,6 +61,14 @@ def script_imports(allow_zluda: bool = True):
             lambda record: 'Not enough SMs to use max_autotune_gemm mode' not in record.getMessage()
         )
 
+    # Every torch.load in the process refuses pickled code (weights_only=True), also where a library asks for
+    # weights_only=False: mgds loads its cache files that way, so a planted or shared cache file ran code. Everything
+    # OneTrainer+ loads with torch.load holds only tensors and plain values (caches, optimizer and EMA state, LoRAs,
+    # embeddings, .ckpt models). PyTorch refuses this together with TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD, so a user who
+    # set that one keeps it.
+    if not os.environ.get("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"):
+        os.environ.setdefault("TORCH_FORCE_WEIGHTS_ONLY_LOAD", "1")
+
     # Prioritize local modules to prevent shadowing; three parents reach the repo root.
     onetrainer_lib_path = Path(__file__).absolute().parent.parent.parent
     sys.path.insert(0, str(onetrainer_lib_path))
@@ -92,3 +100,7 @@ def script_imports(allow_zluda: bool = True):
     # RDNA3 under ROCm: attention with heads above 256 (every VAE) goes to the math kernel, see rocm_sdpa_fix
     from modules.util import rocm_sdpa_fix
     rocm_sdpa_fix.install()
+
+    # transformers before 5.10: a model's chat template names could write files outside the save folder (CVE-2026-9856)
+    from modules.util import chat_template_fix
+    chat_template_fix.install()

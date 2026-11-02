@@ -77,7 +77,7 @@ def make_svd_linear(linear_class):
             if self.cache_dir is not None:
                 filename = self.cache_dir + "/" + _get_tensor_hash(W) + ".pt"
                 with suppress(FileNotFoundError):
-                    U, S, Vh = torch.load(filename, map_location=W.device)
+                    U, S, Vh = torch.load(filename, map_location=W.device, weights_only=True)
 
             if U is None:
                 #use full svd - torch.svd_lowrank is not reducing the quant range nearly as much:

@@ -56,9 +56,8 @@ class CloudTrainer(BaseTrainer):
             raise
 
         def on_command(commands : TrainCommands):
-            backup_on_command = commands.get_and_reset_on_command() #don't pickle a Callable
+            #only the pending commands are sent (cloud_messages), not this callback
             self.cloud.send_commands(commands)
-            commands.set_on_command(backup_on_command)
         self.commands.set_on_command(on_command)
 
         self.stop_event=threading.Event()

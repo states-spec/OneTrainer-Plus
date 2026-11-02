@@ -4,17 +4,18 @@ script_imports()
 
 import json
 import os
-import pickle
 import threading
 import traceback
 from contextlib import suppress
 
+from modules.cloud import cloud_messages
 from modules.util import create
 from modules.util.args.TrainArgs import TrainArgs
 from modules.util.callbacks.TrainCallbacks import TrainCallbacks
 from modules.util.commands.TrainCommands import TrainCommands
 from modules.util.config.SecretsConfig import SecretsConfig
 from modules.util.config.TrainConfig import TrainConfig
+from modules.util.path_util import restrict_to_owner
 
 
 def write_request(filename,name, *params):
@@ -22,8 +23,7 @@ def write_request(filename,name, *params):
         with suppress(FileNotFoundError):
             os.rename(filename,filename+'.write')
         with open(filename+'.write', 'ab') as f:
-            pickle.dump(name,f)
-            pickle.dump(params,f)
+            f.write(cloud_messages.encode_callback(name, *params))
         os.rename(filename+'.write',filename)
     except Exception:
         #TrainCallbacks is suppressing all exceptions; at least print them:
@@ -36,14 +36,19 @@ def close_pipe(filename):
 
 
 
-def command_thread_function(commands: TrainCommands,filename : str,stop_event):
+def command_thread_function(commands: TrainCommands,filename : str,stop_event,model_type):
     while not stop_event.is_set():
         try:
             with open(filename, 'rb') as f:
-                remote_commands=pickle.load(f)
+                data=f.read()
         except FileNotFoundError:
             break
-        except EOFError:
+
+        try:
+            remote_commands=cloud_messages.decode_commands(data,model_type)
+        except Exception:
+            #JSON lines (cloud_messages), never unpickled; anything else is reported and dropped
+            traceback.print_exc()
             continue
 
         commands.merge(remote_commands)
@@ -69,8 +74,10 @@ def main():
         train_config.from_dict(json.load(f))
     train_config.cloud.enabled=False
 
+    secrets_path = "secrets.json" if args.secrets_path is None else args.secrets_path
+    restrict_to_owner(secrets_path)
     try:
-        with open("secrets.json" if args.secrets_path is None else args.secrets_path, "r", encoding="utf-8") as f:
+        with open(secrets_path, "r", encoding="utf-8") as f:
             secrets_dict=json.load(f)
             train_config.secrets = SecretsConfig.default_values().from_dict(secrets_dict)
     except FileNotFoundError:
@@ -81,7 +88,8 @@ def main():
 
     if args.command_path:
         stop_event=threading.Event()
-        command_thread = threading.Thread(target=command_thread_function,args=(commands,args.command_path,stop_event))
+        command_thread = threading.Thread(target=command_thread_function,
+                                          args=(commands,args.command_path,stop_event,train_config.model_type))
         command_thread.start()
 
     try:

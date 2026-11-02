@@ -572,7 +572,8 @@ class VideoToolUIController:
 
         #Respect quotes and split into list to run as yt-dlp command
         additional_args = shlex.split(output_args.strip()) if output_args and output_args.strip() else []
-        cmd = ["yt-dlp", "-o", "%(title)s.%(ext)s", "-P", output_dir] + additional_args + [url]
+        #"--" ends the options: a line of a link list can't pass yt-dlp an option (e.g. "--exec=...") instead of a URL
+        cmd = ["yt-dlp", "-o", "%(title)s.%(ext)s", "-P", output_dir] + additional_args + ["--", url]
 
         self.__update_status(f'Downloading {url}')
         subprocess.run(cmd)
