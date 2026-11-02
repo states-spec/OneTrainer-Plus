@@ -24,11 +24,36 @@ whose work it is built on are listed under [Credits](#credits).
 -   **Training options**: CIOP, CEP and Immiscible Diffusion noise, an exact OFT rotation (CANS), DoRA-OFT and OFT
     spectral norm clipping (all off by default), and stochastic rounding for bfloat16 EMA weights (on by default).
 -   **Cloud training** installs OneTrainer+ from this repository on the cloud machine (upstream's default installed
-    OneTrainer; configs that still name upstream's default repository and folder switch to this one when loaded).
+    OneTrainer; configs that still name upstream's default repository and folder switch to this one when loaded), at
+    the same commit as the PC that starts the run.
+-   **Security**: cloud runs send JSON instead of pickled Python objects, check the cloud machine's SSH key (known_hosts
+    for a Linux server, the first key pinned for the run on RunPod), keep the Hugging Face token off the command line,
+    keep downloads inside the local folder, ask for confirmation before they start, and use a RunPod image pinned by
+    digest. Every `torch.load` loads weights only, `secrets.json` is readable only by its owner, the debug report
+    masks secrets, and the tokenizer chat-template fix from transformers 5.10 is backported to the pinned 5.5.4. Git
+    dependencies are pinned by full commit hash, packages with known vulnerabilities are updated, and the ZLUDA
+    download is checked against its checksum.
 -   **Diagnostics**: a JSONL record of each run, run comparisons and A/B runs, a per-step optimizer view and a config
     diff ([docs/RunDiagnostics.md](docs/RunDiagnostics.md)).
 -   **UI**: a dark theme by default, a settings tab (theme, scale, font size), tooltips that explain each choice, and
     settings shown only where the model and training method use them.
+
+## Current standing
+
+As of November 2026:
+
+-   **Branches**: `master` is the tested state. New work lands on `nightly` first and is merged into `master` once it
+    has been checked. `lock-filing` holds hash-locked installs (every package, including PyTorch, checked against a
+    pinned hash during `install.sh`/`update.sh`), which are not merged yet.
+-   **Based on** OneTrainer's master branch, with upstream's preview-2 branch ported up to #1756 and the features
+    listed under [Credits](#credits).
+-   **Pinned stack**: Python 3.11 to 3.13, PyTorch 2.13.0 (ROCm 7.2, CUDA 12.6 or 13.0), bitsandbytes 0.49.2,
+    transformers 5.5.4, diffusers at a pinned commit, `adv_optm` 2.6.0, PySide6 6.11.2, Pillow 13.0.0.
+-   **Tested on** an AMD Radeon RX 7900 XTX (gfx1100, ROCm 7.2) and on the CPU with `rocm_check`, which trains a
+    small model through the real training script. NVIDIA GPUs aren't tested by this fork; upstream's CUDA support is
+    unchanged.
+-   **Not available on AMD GPUs**: the `*_COMPRESSED` weight types (nvCOMP), cuDNN attention, and the float W8A8
+    types on RDNA3 (no fp8 hardware); training stops before the model loads when one of them is selected.
 
 ## Features
 
