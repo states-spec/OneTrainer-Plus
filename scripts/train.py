@@ -12,6 +12,7 @@ from modules.util.commands.TrainCommands import TrainCommands
 from modules.util.config.SecretsConfig import SecretsConfig
 from modules.util.config.TrainConfig import TrainConfig, prepare_run_name
 from modules.util.optimizer_util import default_optimizer_config
+from modules.util.path_util import restrict_to_owner
 
 
 def load_config(args: TrainArgs, train_config: TrainConfig) -> TrainConfig:
@@ -56,8 +57,10 @@ def main():
     train_config.run_name = prepare_run_name(
         train_config.training_method, train_config.run_name_mode, train_config.run_name, is_new_invocation=True)
 
+    secrets_path = "secrets.json" if args.secrets_path is None else args.secrets_path
+    restrict_to_owner(secrets_path)
     try:
-        with open("secrets.json" if args.secrets_path is None else args.secrets_path, "r", encoding="utf-8") as f:
+        with open(secrets_path, "r", encoding="utf-8") as f:
             secrets_dict=json.load(f)
             train_config.secrets = SecretsConfig.default_values().from_dict(secrets_dict)
     except FileNotFoundError:

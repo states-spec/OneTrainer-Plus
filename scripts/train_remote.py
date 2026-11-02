@@ -15,6 +15,7 @@ from modules.util.callbacks.TrainCallbacks import TrainCallbacks
 from modules.util.commands.TrainCommands import TrainCommands
 from modules.util.config.SecretsConfig import SecretsConfig
 from modules.util.config.TrainConfig import TrainConfig
+from modules.util.path_util import restrict_to_owner
 
 
 def write_request(filename,name, *params):
@@ -73,8 +74,10 @@ def main():
         train_config.from_dict(json.load(f))
     train_config.cloud.enabled=False
 
+    secrets_path = "secrets.json" if args.secrets_path is None else args.secrets_path
+    restrict_to_owner(secrets_path)
     try:
-        with open("secrets.json" if args.secrets_path is None else args.secrets_path, "r", encoding="utf-8") as f:
+        with open(secrets_path, "r", encoding="utf-8") as f:
             secrets_dict=json.load(f)
             train_config.secrets = SecretsConfig.default_values().from_dict(secrets_dict)
     except FileNotFoundError:

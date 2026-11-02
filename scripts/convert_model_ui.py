@@ -9,6 +9,7 @@ script_imports()
 from modules.ui.ConvertModelUIController import ConvertModelUIController
 from modules.ui.PySide6ConvertModelUIView import PySide6ConvertModelUIView
 from modules.util.config.SecretsConfig import SecretsConfig
+from modules.util.path_util import restrict_to_owner
 from modules.util.ui.pyside6_util import create_application
 
 
@@ -16,6 +17,7 @@ def main():
     _app = create_application()
 
     huggingface_token = ""
+    restrict_to_owner("secrets.json")
     with suppress(FileNotFoundError), open("secrets.json", "r", encoding="utf-8") as f:
         secrets_dict = json.load(f)
         huggingface_token = SecretsConfig.default_values().from_dict(secrets_dict).huggingface_token

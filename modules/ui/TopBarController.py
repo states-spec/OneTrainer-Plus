@@ -11,7 +11,7 @@ from modules.util.config.TrainConfig import TrainConfig
 from modules.util.enum.ModelType import ModelType
 from modules.util.enum.TrainingMethod import TrainingMethod
 from modules.util.optimizer_util import default_optimizer_config
-from modules.util.path_util import write_json_atomic
+from modules.util.path_util import restrict_to_owner, write_json_atomic
 from modules.util.ui.browser_util import open_url
 
 # base models for the model types that have no built-in preset (the others use their presets' choice)
@@ -177,6 +177,7 @@ class TopBarController:
             default_config.optimizer = default_optimizer_config(loaded_config.optimizer.optimizer)
             loaded_config = default_config.from_dict(copy.deepcopy(loaded_dict), migrate=migrate).to_unpacked_config()
 
+            restrict_to_owner("secrets.json")
             with suppress(FileNotFoundError), open("secrets.json", "r", encoding="utf-8") as f:
                 secrets_dict = json.load(f)
                 loaded_config.secrets = SecretsConfig.default_values().from_dict(secrets_dict)
@@ -195,7 +196,7 @@ class TopBarController:
             return None
 
     def save_secrets(self, path) -> str:
-        write_json_atomic(path, self.train_config.secrets.to_dict())
+        write_json_atomic(path, self.train_config.secrets.to_dict(), private=True)
         return path
 
     def open_wiki(self):
