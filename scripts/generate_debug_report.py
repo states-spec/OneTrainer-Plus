@@ -25,6 +25,7 @@ except ImportError:
     from modules.util.config.TrainConfig import TrainConfig
 from modules.util import path_util
 
+import huggingface_hub.utils.logging  # noqa: F401 (adds hub's own log handler, removed below)
 import psutil
 import requests
 
@@ -37,6 +38,15 @@ logging.basicConfig(
     level=logging.INFO,
     format="[%(levelname)s] %(message)s"
 )
+
+# huggingface_hub gives its loggers a handler of its own and still passes their records on to the root logger, so with
+# the root handler above every hub warning was printed twice, once plain and once with [WARNING]. The training UI has
+# that root handler too (it imports this module): the server's "You are sending unauthenticated requests" warning
+# appeared twice at the first download. Hub records now go through the root handler only.
+hf_hub_logger = logging.getLogger("huggingface_hub")
+for handler in list(hf_hub_logger.handlers):
+    if type(handler) is logging.StreamHandler:
+        hf_hub_logger.removeHandler(handler)
 
 # == Helper Classes ==
 
