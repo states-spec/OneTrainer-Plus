@@ -1,5 +1,7 @@
+import io
 import shlex
 import threading
+from contextlib import suppress
 from pathlib import Path
 
 from modules.cloud import cloud_messages
@@ -37,6 +39,7 @@ class LinuxCloud(BaseCloud):
         self.exit_status_file=f'{config.cloud.remote_dir}/{name}.exit'
         self.log_file=f'{config.cloud.remote_dir}/{name}.log'
         self.pid_file=f'{config.cloud.remote_dir}/{name}.pid'
+        self.token_file=f'{config.cloud.remote_dir}/{name}.token'
 
     def _connect(self):
         if self.connection:
@@ -144,7 +147,7 @@ class LinuxCloud(BaseCloud):
         self.host_keys.close()
 
     def can_reattach(self):
-        result=self.connection.run(f"test -f {self.pid_file}",warn=True,in_stream=False)
+        result=self.connection.run(f"test -f {shlex.quote(self.pid_file)}",warn=True,in_stream=False)
         return result.exited == 0
 
     def _get_action_cmd(self,action : CloudAction):
@@ -163,36 +166,54 @@ class LinuxCloud(BaseCloud):
              && export OT_LAZY_UPDATES=true"
 
         if self.config.secrets.huggingface_token != "":
-            cmd+=f" && export HF_TOKEN={self.config.secrets.huggingface_token}"
+            #the token goes over the SSH channel's input into a file only its owner can read, which the trainer's
+            #command reads and deletes first. In the command line it was in the cloud machine's process list for the
+            #whole run, and in the error message of every failed cloud run.
+            token_file=shlex.quote(self.token_file)
+            self.connection.run(f"(umask 077 && cat > {token_file})",hide=True,
+                                in_stream=io.StringIO(self.config.secrets.huggingface_token))
+            cmd+=f" && {{ HF_TOKEN=$(cat {token_file}); rm -f {token_file}; export HF_TOKEN; }}"
         if config.huggingface_cache_dir != "":
-            cmd+=f" && export HF_HOME={config.huggingface_cache_dir}"
+            #quoted, but a leading ~/ still means the remote home, as it did unquoted
+            hf_home=config.huggingface_cache_dir
+            hf_home='"$HOME"/'+shlex.quote(hf_home[2:]) if hf_home.startswith("~/") else shlex.quote(hf_home)
+            cmd+=f" && export HF_HOME={hf_home}"
 
-        cmd+=f' && {config.onetrainer_dir}/run-cmd.sh train_remote --config-path={shlex.quote(self.config_file)} \
+        cmd+=f' && {shlex.quote(config.onetrainer_dir + "/run-cmd.sh")} train_remote --config-path={shlex.quote(self.config_file)} \
                                                                    --callback-path={shlex.quote(self.callback_file)} \
                                                                    --command-path={shlex.quote(self.command_pipe)}'
 
-        if config.detach_trainer:
-            self.connection.run(f'rm -f {self.exit_status_file}',in_stream=False)
+        try:
+            if config.detach_trainer:
+                exit_status_file=shlex.quote(self.exit_status_file)
+                self.connection.run(f'rm -f {exit_status_file}',in_stream=False)
 
-            cmd=f"({cmd} ; exit_status=$? ; echo $exit_status > {self.exit_status_file}; exit $exit_status)"
+                cmd=f"({cmd} ; exit_status=$? ; echo $exit_status > {exit_status_file}; exit $exit_status)"
 
-            #if the callback file still exists 10 seconds after the trainer has exited, the client must be detached, because the clients reads and deletes this file:
-            cmd+=f" && (sleep 10 && test -f {shlex.quote(self.callback_file)} && {self._get_action_cmd(config.on_detached_finish)} || true) \
-                    || (sleep 10 && test -f {shlex.quote(self.callback_file)} && {self._get_action_cmd(config.on_detached_error)})"
+                #if the callback file still exists 10 seconds after the trainer has exited, the client must be detached, because the clients reads and deletes this file:
+                cmd+=f" && (sleep 10 && test -f {shlex.quote(self.callback_file)} && {self._get_action_cmd(config.on_detached_finish)} || true) \
+                        || (sleep 10 && test -f {shlex.quote(self.callback_file)} && {self._get_action_cmd(config.on_detached_error)})"
 
-            cmd=f'(nohup true && {cmd}) > {self.log_file} 2>&1 & echo $! > {self.pid_file}'
-            self.connection.run(cmd,disown=True)
-            self.__trail_detached_trainer()
-        else:
-            self.connection.run(cmd,in_stream=False)
+                cmd=f'(nohup true && {cmd}) > {shlex.quote(self.log_file)} 2>&1 & echo $! > {shlex.quote(self.pid_file)}'
+                self.connection.run(cmd,disown=True)
+                self.__trail_detached_trainer()
+            else:
+                self.connection.run(cmd,in_stream=False)
+        finally:
+            #the trainer's command deletes the token file when it starts; this covers a command that failed before that
+            if self.config.secrets.huggingface_token != "":
+                with suppress(Exception):
+                    self.connection.run(f"rm -f {shlex.quote(self.token_file)}",warn=True,hide=True,in_stream=False)
 
     def __trail_detached_trainer(self):
-        cmd=f'tail -f {self.log_file} --pid $(<{self.pid_file})'
+        log_file=shlex.quote(self.log_file)
+        pid_file=shlex.quote(self.pid_file)
+        cmd=f'tail -f {log_file} --pid $(<{pid_file})'
         self.connection.run(cmd,in_stream=False)
         #trainer has exited, don't reattach:
-        self.connection.run(f'rm -f {self.pid_file}',in_stream=False)
+        self.connection.run(f'rm -f {pid_file}',in_stream=False)
         #raise an exception if the training process return an exit code != 0:
-        self.connection.run(f'exit $(<{self.exit_status_file})',in_stream=False)
+        self.connection.run(f'exit $(<{shlex.quote(self.exit_status_file)})',in_stream=False)
 
 
 
