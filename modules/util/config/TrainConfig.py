@@ -173,6 +173,7 @@ class TrainOptimizerConfig(BaseConfig):
     centered_wd_mode: str
     stochastic_sign: False
     geometric_wd: False
+    scaled_wd: bool
     snr_cond: False
     sinkhorn_iterations: int
     orthogonal_sinkhorn: False
@@ -295,6 +296,7 @@ class TrainOptimizerConfig(BaseConfig):
         data.append(("centered_wd_mode", "full", str, False))  # full, float8, int8, int4
         data.append(("stochastic_sign", False, bool, False))
         data.append(("geometric_wd", False, bool, False))
+        data.append(("scaled_wd", False, bool, False))
         data.append(("snr_cond", False, bool, False))
         data.append(("sinkhorn_iterations", None, int, True))
         data.append(("orthogonal_sinkhorn", False, bool, False))

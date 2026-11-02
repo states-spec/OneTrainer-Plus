@@ -43,6 +43,8 @@ results up to the check that was running (the report names it). The exit code is
    - every optimizer with the UI's default settings: created, stepped, saved and resumed like a backup (the resumed
      run has to match the uninterrupted one), and the fused back pass where it is supported (the bitsandbytes
      optimizers only on the GPU)
+   - PRODIGY_ADV's Nesterov step (adv_optm's own is broken; OneTrainer+ runs a fixed copy): with Prodigy's step size
+     D held fixed it has to match AdamW_adv's Nesterov step, and with Nesterov off adv_optm's step exactly
    - timestep sampling with every distribution, wide noising weights/biases and shifts: no sample outside the
      noise schedule (one past its end is a device-side assert, which aborts the process under ROCm)
    - layer and activation offloading through the real `LayerOffloadConductor`: same loss and gradients as without
@@ -78,10 +80,11 @@ results up to the check that was running (the report names it). The exit code is
    model's components on the GPU against the CPU, with the same inputs: the text encoder (captions of two lengths, so
    the attention is masked), the VAE both ways, and the transformer with a LoRA forward and backward, in fp32 and in
    bf16 under autocast. With `--full`, the same tiny model also trains once per feature (about 35 runs): other
-   optimizers (Prodigy_adv, Muon, AdaMuon with the auxiliary Adam), every LoRA output format and adapter type (LoRA,
-   DoRA, LoHa, LoKr, OFT), an additional embedding, embedding training, fine-tuning, validation, prior prediction,
-   masked prior preservation with an image that has no mask, other losses and noise options, gradient accumulation
-   with the fused back pass, a restarting scheduler, saves every step with EMA, float8 weights. Each run has to finish
+   optimizers (Prodigy_adv with and without Nesterov, Muon, AdaMuon with the auxiliary Adam, SinkSGD on OFT next to an
+   additional embedding, Adopt with scaled weight decay), every LoRA output format and adapter type (LoRA, DoRA, LoHa,
+   LoKr, OFT), an additional embedding, embedding training, fine-tuning, validation, prior prediction, masked prior
+   preservation with an image that has no mask, other losses and noise options, gradient accumulation with the fused
+   back pass, a restarting scheduler, saves every step with EMA, float8 weights. Each run has to finish
    with finite weights, and each saved LoRA is loaded back as the starting LoRA of a run at learning rate 0, which has
    to save exactly the same tensors (so no layer, adapter part or bundled embedding is lost or misplaced on loading).
    When a run fails, the folder with every run is kept (the report names it), each with its whole output in

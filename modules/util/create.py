@@ -133,6 +133,27 @@ def _adv_orthograd_mode(value) -> str:
     return value if value is not None else "disabled"
 
 
+def _bnb_optimizer(optimizer_class, **kwargs):
+    # bitsandbytes 0.50 removed percentile_clipping and block_wise from every optimizer (percentile clipping is gone,
+    # 8-bit states are always block-wise), so passing them raised a TypeError when the optimizer was built, after the
+    # model had loaded (upstream's preview-2 pins 0.50.2 with these arguments). They are passed only where the
+    # installed bitsandbytes takes them; a setting that can't take effect there is named
+    import inspect
+
+    import bitsandbytes as bnb
+    accepted = inspect.signature(optimizer_class.__init__).parameters
+    ignored = []
+    if "percentile_clipping" not in accepted and kwargs.pop("percentile_clipping", 100) < 100:
+        ignored.append("Percentile Clipping (removed)")
+    has_8bit_state = "8bit" in optimizer_class.__name__ or kwargs.get("optim_bits") == 8
+    if "block_wise" not in accepted and kwargs.pop("block_wise", True) is False and has_8bit_state:
+        ignored.append("Block Wise off (8-bit states are always block-wise)")
+    if ignored:
+        print(f"Warning: bitsandbytes {bnb.__version__} ignores these {optimizer_class.__name__} settings: "
+              f"{', '.join(ignored)}.")
+    return optimizer_class(**kwargs)
+
+
 def _bnb_lars_on_momentum_kernels(optimizer):
     # bitsandbytes' LARS is SGD with momentum whose update is limited to max_unorm times the weight norm, run on
     # momentum's kernels. bitsandbytes 0.49 has no "lars" entry in its 32-bit kernel table (its 8-bit table still maps
@@ -156,7 +177,7 @@ def _adv_common_kwargs(optimizer_config: TrainOptimizerConfig, nesterov_default:
     # settings every adv_optm optimizer except Lion_adv takes
     state_precision = _adv_state_precision(optimizer_config.optimizer, optimizer_config.state_precision)
     if optimizer_config.optimizer == Optimizer.SINKSGD_ADV and not optimizer_config.momentum:
-        # without momentum SinkSGD_adv keeps no state to factor, and adv_optm 2.5.13-2.5.16 fails on "factored" then
+        # without momentum SinkSGD_adv keeps no state to factor, and adv_optm 2.5.13-2.6.0 fails on "factored" then
         state_precision = "auto" if state_precision == "factored" else state_precision
     return {
         "orthogonal_gradient": _adv_orthograd_mode(optimizer_config.orthogonal_gradient),
@@ -166,7 +187,39 @@ def _adv_common_kwargs(optimizer_config: TrainOptimizerConfig, nesterov_default:
         "centered_wd": optimizer_config.centered_wd if optimizer_config.centered_wd is not None else 0.0,
         "centered_wd_mode": optimizer_config.centered_wd_mode if optimizer_config.centered_wd_mode is not None else "full",
         "spectral_normalization": optimizer_config.spectral_normalization if optimizer_config.spectral_normalization is not None else False,
+        **_adv_scaled_wd_kwargs(optimizer_config),
     }
+
+
+def _adv_scaled_wd_kwargs(optimizer_config: TrainOptimizerConfig) -> dict:
+    # every adv_optm optimizer takes scaled_wd since 2.6.0. Passed only when it is on, so a venv that still has
+    # adv_optm 2.5 (a git pull without update.sh) trains as before; check_optimizer_config stops if it is on there
+    return {"scaled_wd": True} if optimizer_config.scaled_wd else {}
+
+
+def _adv_optm_has_scaled_wd() -> bool:
+    import inspect
+
+    from adv_optm import AdamW_adv
+    return "scaled_wd" in inspect.signature(AdamW_adv.__init__).parameters
+
+
+def _sinksgd_oft_mode_groups(parameters: list[dict]) -> list[str]:
+    # adv_optm 2.6's SinkSGD_adv normalizes OFT updates with a skew-symmetric Sinkhorn (oft_mode), which treats every
+    # matrix of the group as OFT blocks of shape (r, b * (b - 1) / 2). Upstream turns it on for the whole optimizer
+    # whenever the config's adapter type is OFT, which also reaches full fine-tuning and embedding runs of a config that
+    # still has OFT selected, and the additional embeddings trained next to an OFT LoRA: their matrices fail in the
+    # first step (index_put shape mismatch), or are normalized as rotations if a width happens to fit. So it is set per
+    # group, only where every matrix is a tagged OFT block (tag_util); vectors, such as DoRA-OFT's magnitudes, take
+    # SinkSGD_adv's sign path either way
+    oft_groups = []
+    for group in parameters:
+        matrices = [p for p in group['params'] if p.ndim >= 2 and not getattr(p, '_is_dora_scale', False)
+                    and not getattr(p, 'is_vector', False)]
+        group['oft_mode'] = bool(matrices) and all(getattr(p, '_is_oft', False) for p in matrices)
+        if group['oft_mode']:
+            oft_groups.append(str(group.get('name')))
+    return oft_groups
 
 
 def _adv_adam_kwargs(optimizer_config: TrainOptimizerConfig) -> dict:
@@ -182,12 +235,23 @@ def _adv_optm_version() -> str:
     return getattr(adv_optm, "__version__", "unknown")
 
 
+# adv_optm minor versions whose optimizer states are interchangeable. 2.6.0 only added settings (scaled_wd,
+# SinkSGD_adv's oft_mode), which a group saved without them gets from the config (create_optimizer adds missing
+# settings), and stores every state tensor as 2.5 does
+_ADV_OPTM_COMPATIBLE_STATES = ({"2.5", "2.6"},)
+
+
+def _adv_optm_state_family(version: str) -> set[str]:
+    minor = ".".join(version.split(".")[:2])
+    return next((family for family in _ADV_OPTM_COMPATIBLE_STATES if minor in family), {minor})
+
+
 def _check_adv_optm_state_version(state_dict: dict) -> dict | None:
-    # adv_optm changes its state layout between minor versions (2.5 can not load the state of 2.2), so the state of
-    # another version is dropped: the training resumes with fresh optimizer statistics instead of failing to load
+    # adv_optm changes its state layout between some minor versions (2.5 can not load the state of 2.2), so the state
+    # of an incompatible version is dropped: the training resumes with fresh optimizer statistics instead of failing
     saved_version = state_dict.get("adv_optm_version")
     current_version = _adv_optm_version()
-    if saved_version is not None and saved_version.split(".")[:2] == current_version.split(".")[:2]:
+    if saved_version is not None and _adv_optm_state_family(saved_version) == _adv_optm_state_family(current_version):
         return state_dict
     print(f"Warning: the saved optimizer state was written by adv_optm {saved_version or 'older than 2.5'}, "
           f"which adv_optm {current_version} can not load. The optimizer state is reset; "
@@ -199,8 +263,8 @@ def _restore_adv_optm_state_dtypes(optimizer: torch.optim.Optimizer, state_dict:
     # torch's load_state_dict casts every state tensor to the dtype of its parameter, and adv_optm 2.5 then casts
     # them to one dtype per group. That turns signed int8 states (int8_sr) into uint8, rounds fp32 states of bf16
     # weights to bf16 precision, and gives the fp32 states of vectors in "factored" mode the weight dtype, which fails
-    # in the next step. The state was saved by the same adv_optm version (checked before), so the saved tensors are
-    # exactly what the optimizer uses: put them back.
+    # in the next step. The state was saved by an adv_optm version with the same state layout (checked before), so the
+    # saved tensors are exactly what the optimizer uses: put them back.
     for saved_group, group in zip(state_dict['param_groups'], optimizer.param_groups, strict=True):
         for saved_index, p in zip(saved_group['params'], group['params'], strict=True):
             saved_state = state_dict['state'].get(saved_index)
@@ -214,23 +278,32 @@ def _restore_adv_optm_state_dtypes(optimizer: torch.optim.Optimizer, state_dict:
                     state[key] = saved_value.to(device=value.device, copy=True)
 
 
-# adv_optm's Prodigy_adv (2.5.13-2.5.16) keeps its momentum scaled by d, but its Nesterov step mixes in the unscaled gradient
+# adv_optm's Prodigy_adv (2.5.13-2.6.0) keeps its momentum scaled by d, but its Nesterov step mixes in the unscaled gradient
 # (exp_avg.lerp_(grad, 1 - coef)). That term is 1/d times too large, so every step moves each weight by about
-# 0.1 * lr whatever d is: at lr 1 a LoRA turned to noise within the first steps. The other adv_optm optimizers keep
-# their momentum in gradient units and are not affected.
-_PRODIGY_ADV_NESTEROV = ("Nesterov momentum is broken in PRODIGY_ADV (adv_optm 2.5.13 and every later release and "
-                         "branch so far): it moves every weight by about 0.1 x the learning rate per step regardless of "
+# 0.1 * lr whatever d is: at lr 1 a LoRA turned to noise within the first steps. prodigy_adv_nesterov builds the fixed
+# step from adv_optm's own code; this is what happens if it can't (an adv_optm whose code no longer matches the fix)
+_PRODIGY_ADV_NESTEROV = ("Nesterov momentum is broken in this adv_optm's PRODIGY_ADV, and OneTrainer+'s fix doesn't "
+                         "match its code: it moves every weight by about 0.1 x the learning rate per step regardless of "
                          "Prodigy's step size, which destroys the model")
 
 
+def _prodigy_adv_nesterov_works() -> bool:
+    from modules.util.optimizer.prodigy_adv_nesterov import prodigy_adv_class
+    return prodigy_adv_class()[1]
+
+
 def check_optimizer_config(optimizer_config: TrainOptimizerConfig):
-    # turns off settings known to break training; GenericTrainer.start calls it before the model loads. The UI hides
-    # these settings for the optimizer, so a value saved earlier could not be changed there.
-    if optimizer_config.optimizer == Optimizer.PRODIGY_ADV and optimizer_config.nesterov:
+    # turns off settings known to break training; GenericTrainer.start calls it before the model loads
+    if optimizer_config.optimizer == Optimizer.PRODIGY_ADV and optimizer_config.nesterov \
+            and not _prodigy_adv_nesterov_works():
         print(f"Warning: {_PRODIGY_ADV_NESTEROV}. The config has it on; it is turned off for this run.")
         optimizer_config.nesterov = False
 
-    # adv_optm 2.5.13-2.5.16: Adopt_adv's fp16 state fails in its first step together with these (a dtype error,
+    if optimizer_config.optimizer.is_adv_optm and optimizer_config.scaled_wd and not _adv_optm_has_scaled_wd():
+        raise ValueError(f"Scaled Weight Decay needs adv_optm 2.6.0, but {_adv_optm_version()} is installed. Run "
+                         f"update.sh (update.bat on Windows) to install the current requirements.")
+
+    # adv_optm 2.5.13-2.6.0: Adopt_adv's fp16 state fails in its first step together with these (a dtype error,
     # "expected dtype c10::Half for `end`"), after the model has loaded and the cache is built
     if optimizer_config.optimizer == Optimizer.ADOPT_ADV and (optimizer_config.state_precision or "").lower() == "fp16":
         clashing = [title for title, on in (("Nesterov", optimizer_config.nesterov),
@@ -254,7 +327,7 @@ def check_optimizer_config(optimizer_config: TrainOptimizerConfig):
 
 def _disable_prodigy_adv_nesterov(optimizer: torch.optim.Optimizer):
     # a resumed group keeps the backup's settings, so a backup made with Nesterov on would still use it
-    if any(group.get('nesterov') for group in optimizer.param_groups):
+    if not _prodigy_adv_nesterov_works() and any(group.get('nesterov') for group in optimizer.param_groups):
         print(f"Warning: {_PRODIGY_ADV_NESTEROV}. The backup was made with it on; it is turned off for this run.")
         for group in optimizer.param_groups:
             group['nesterov'] = False
@@ -379,7 +452,7 @@ def create_optimizer(
         # SGD_8BIT Optimizer
         case Optimizer.SGD_8BIT:
             import bitsandbytes as bnb
-            optimizer = bnb.optim.SGD8bit(
+            optimizer = _bnb_optimizer(bnb.optim.SGD8bit,
                 params=parameters,
                 lr=config.learning_rate,
                 momentum=optimizer_config.momentum if optimizer_config.momentum is not None else 0,
@@ -447,7 +520,7 @@ def create_optimizer(
         # ADAM_8BIT Optimizer
         case Optimizer.ADAM_8BIT:
             import bitsandbytes as bnb
-            optimizer = bnb.optim.Adam8bit(
+            optimizer = _bnb_optimizer(bnb.optim.Adam8bit,
                 params=parameters,
                 lr=config.learning_rate,
                 betas=(optimizer_config.beta1 if optimizer_config.beta1 is not None else 0.9,
@@ -463,7 +536,7 @@ def create_optimizer(
         # ADAMW_8BIT Optimizer
         case Optimizer.ADAMW_8BIT:
             import bitsandbytes as bnb
-            optimizer = bnb.optim.AdamW8bit(
+            optimizer = _bnb_optimizer(bnb.optim.AdamW8bit,
                 params=parameters,
                 lr=config.learning_rate,
                 betas=(optimizer_config.beta1 if optimizer_config.beta1 is not None else 0.9,
@@ -479,7 +552,7 @@ def create_optimizer(
         # AdEMAMix_8BIT Optimizer
         case Optimizer.AdEMAMix_8BIT:
             import bitsandbytes as bnb
-            optimizer = bnb.optim.AdEMAMix8bit(
+            optimizer = _bnb_optimizer(bnb.optim.AdEMAMix8bit,
                 params=parameters,
                 lr=config.learning_rate,
                 betas=(optimizer_config.beta1 if optimizer_config.beta1 is not None else 0.9,
@@ -495,7 +568,7 @@ def create_optimizer(
         # AdEMAMix Optimizer
         case Optimizer.AdEMAMix:
             import bitsandbytes as bnb
-            optimizer = bnb.optim.AdEMAMix(
+            optimizer = _bnb_optimizer(bnb.optim.AdEMAMix,
                 params=parameters,
                 lr=config.learning_rate,
                 betas=(optimizer_config.beta1 if optimizer_config.beta1 is not None else 0.9,
@@ -512,7 +585,7 @@ def create_optimizer(
         # ADAGRAD Optimizer
         case Optimizer.ADAGRAD:
             import bitsandbytes as bnb
-            optimizer = bnb.optim.Adagrad(
+            optimizer = _bnb_optimizer(bnb.optim.Adagrad,
                 params=parameters,
                 lr=config.learning_rate,
                 weight_decay=optimizer_config.weight_decay if optimizer_config.weight_decay is not None else 0,
@@ -524,7 +597,7 @@ def create_optimizer(
         # ADAGRAD_8BIT Optimizer
         case Optimizer.ADAGRAD_8BIT:
             import bitsandbytes as bnb
-            optimizer = bnb.optim.Adagrad8bit(
+            optimizer = _bnb_optimizer(bnb.optim.Adagrad8bit,
                 params=parameters,
                 lr=config.learning_rate,
                 weight_decay=optimizer_config.weight_decay if optimizer_config.weight_decay is not None else 0,
@@ -539,7 +612,7 @@ def create_optimizer(
         # RMSPROP Optimizer
         case Optimizer.RMSPROP:
             import bitsandbytes as bnb
-            optimizer = bnb.optim.RMSprop(
+            optimizer = _bnb_optimizer(bnb.optim.RMSprop,
                 params=parameters,
                 lr=config.learning_rate,
                 weight_decay=optimizer_config.weight_decay if optimizer_config.weight_decay is not None else 0,
@@ -552,7 +625,7 @@ def create_optimizer(
         # RMSPROP_8BIT Optimizer
         case Optimizer.RMSPROP_8BIT:
             import bitsandbytes as bnb
-            optimizer = bnb.optim.RMSprop8bit(
+            optimizer = _bnb_optimizer(bnb.optim.RMSprop8bit,
                 params=parameters,
                 lr=config.learning_rate,
                 weight_decay=optimizer_config.weight_decay if optimizer_config.weight_decay is not None else 0,
@@ -580,7 +653,7 @@ def create_optimizer(
         # LARS Optimizer
         case Optimizer.LARS:
             import bitsandbytes as bnb
-            optimizer = _bnb_lars_on_momentum_kernels(bnb.optim.LARS(
+            optimizer = _bnb_lars_on_momentum_kernels(_bnb_optimizer(bnb.optim.LARS,
                 params=parameters,
                 lr=config.learning_rate,
                 weight_decay=optimizer_config.weight_decay if optimizer_config.weight_decay is not None else 0,
@@ -593,7 +666,7 @@ def create_optimizer(
         # LARS_8BIT Optimizer
         case Optimizer.LARS_8BIT:
             import bitsandbytes as bnb
-            optimizer = _bnb_lars_on_momentum_kernels(bnb.optim.LARS8bit(
+            optimizer = _bnb_lars_on_momentum_kernels(_bnb_optimizer(bnb.optim.LARS8bit,
                 params=parameters,
                 lr=config.learning_rate,
                 weight_decay=optimizer_config.weight_decay if optimizer_config.weight_decay is not None else 0,
@@ -608,7 +681,7 @@ def create_optimizer(
         # LAMB Optimizer
         case Optimizer.LAMB:
             import bitsandbytes as bnb
-            optimizer = bnb.optim.LAMB(
+            optimizer = _bnb_optimizer(bnb.optim.LAMB,
                 params=parameters,
                 lr=config.learning_rate,
                 bias_correction=optimizer_config.bias_correction if optimizer_config.bias_correction is not None else True,
@@ -628,7 +701,7 @@ def create_optimizer(
         # LAMB_8BIT Optimizer
         case Optimizer.LAMB_8BIT:
             import bitsandbytes as bnb
-            optimizer = bnb.optim.LAMB8bit(
+            optimizer = _bnb_optimizer(bnb.optim.LAMB8bit,
                 params=parameters,
                 lr=config.learning_rate,
                 bias_correction=optimizer_config.bias_correction if optimizer_config.bias_correction is not None else True,
@@ -647,7 +720,7 @@ def create_optimizer(
         # LION_8BIT Optimizer
         case Optimizer.LION_8BIT:
             import bitsandbytes as bnb
-            optimizer = bnb.optim.Lion8bit(
+            optimizer = _bnb_optimizer(bnb.optim.Lion8bit,
                 params=parameters,
                 lr=config.learning_rate if config.learning_rate is not None else 0,
                 weight_decay=optimizer_config.weight_decay if optimizer_config.weight_decay is not None else 0,
@@ -925,9 +998,15 @@ def create_optimizer(
 
         # PRODIGY_ADV Optimizer
         case Optimizer.PRODIGY_ADV:
-            from adv_optm import Prodigy_adv
+            from modules.util.optimizer import prodigy_adv_nesterov
+            # the fixed class runs every PRODIGY_ADV training while the installed adv_optm has the bug: a resumed
+            # backup can have Nesterov on although the config hasn't, and with Nesterov off it is adv_optm's own step
+            prodigy_class = prodigy_adv_nesterov.prodigy_adv_class()[0]
             check_optimizer_config(optimizer_config)
-            optimizer = Prodigy_adv(
+            if optimizer_config.nesterov and prodigy_class.__module__ == prodigy_adv_nesterov.__name__:
+                print(f"Note: PRODIGY_ADV's Nesterov momentum runs with OneTrainer+'s fix for adv_optm "
+                      f"{_adv_optm_version()} (its gradient term scaled by Prodigy's step size D).")
+            optimizer = prodigy_class(
                 params=parameters,
                 lr=config.learning_rate,
                 betas=(optimizer_config.beta1 if optimizer_config.beta1 is not None else 0,
@@ -972,6 +1051,9 @@ def create_optimizer(
         # SinkSGD_ADV Optimizer
         case Optimizer.SINKSGD_ADV:
             from adv_optm import SinkSGD_adv
+            if oft_groups := _sinksgd_oft_mode_groups(parameters):
+                print(f"Note: SINKSGD_ADV normalizes the OFT updates of {', '.join(oft_groups)} with adv_optm's "
+                      f"skew-symmetric Sinkhorn (its OFT mode).")
             optimizer = SinkSGD_adv(
                 params=parameters,
                 lr=config.learning_rate,
@@ -1006,6 +1088,7 @@ def create_optimizer(
                 centered_wd=optimizer_config.centered_wd if optimizer_config.centered_wd is not None else 0.0,
                 centered_wd_mode=optimizer_config.centered_wd_mode if optimizer_config.centered_wd_mode is not None else "full",
                 spectral_normalization=optimizer_config.spectral_normalization if optimizer_config.spectral_normalization is not None else False,
+                **_adv_scaled_wd_kwargs(optimizer_config),
                 compiled_optimizer=optimizer_config.compile if optimizer_config.compile is not None else False,
             )
 
