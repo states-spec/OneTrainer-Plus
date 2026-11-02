@@ -109,6 +109,37 @@ class CloudConfig(BaseConfig):
                 print(note)
         return self
 
+    def describe_run(self, secrets: CloudSecretsConfig) -> str:
+        """What a cloud run with these settings does, shown before it starts: a config file brings its cloud
+        settings along (install command, GPU, end actions), and the saved cloud login from secrets.json is added."""
+        actions = {CloudAction.NONE: "keep it running", CloudAction.STOP: "stop it", CloudAction.DELETE: "delete it"}
+        lines = []
+        if self.type == CloudType.RUNPOD:
+            if secrets.id:
+                lines.append(f"Machine: the RunPod pod {secrets.id}")
+            elif self.create:
+                lines.append(f"Machine: a new RunPod pod ({self.gpu_type or 'no GPU type set'}, "
+                             f"{(self.sub_type or 'any').lower()} cloud, {self.volume_size} GB volume), billed to "
+                             f"your RunPod account")
+            else:
+                lines.append("Machine: RunPod, but no pod id is set and creating a pod is off")
+        else:
+            lines.append(f"Machine: the Linux server {secrets.user}@{secrets.host}, port {secrets.port}")
+        if self.install_onetrainer or self.update_onetrainer:
+            note = "" if self.install_cmd == DEFAULT_INSTALL_CMD else "  <- not the default command"
+            lines.append(f"Installs and runs {APP_NAME} from {self.onetrainer_dir} there; if that folder doesn't "
+                         f"exist yet, it runs:\n    {self.install_cmd}{note}")
+        else:
+            lines.append(f"Runs the {APP_NAME} already in {self.onetrainer_dir} there")
+        lines.append(f"When training finishes: {actions[self.on_finish]}; after an error: {actions[self.on_error]}")
+        if self.detach_trainer:
+            lines.append(f"If this PC is disconnected (detached run '{self.run_id}'): "
+                         f"{actions[self.on_detached_finish]} when it finishes, "
+                         f"{actions[self.on_detached_error]} after an error")
+        if self.delete_workspace:
+            lines.append("The workspace on the cloud machine is deleted afterwards")
+        return "\n".join(lines)
+
     @staticmethod
     def default_values():
         data = []

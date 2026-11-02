@@ -3,6 +3,7 @@ from util.import_util import script_imports
 script_imports()
 
 import json
+import sys
 
 from modules.util import create
 from modules.util.args.TrainArgs import TrainArgs
@@ -62,6 +63,15 @@ def main():
     except FileNotFoundError:
         if args.secrets_path is not None:
             raise
+
+    # a config file brings its cloud settings (install command, GPU, end actions) to the saved cloud login
+    if train_config.cloud.enabled:
+        print("This training runs on a cloud machine, with your saved cloud login:\n"
+              + train_config.cloud.describe_run(train_config.secrets.cloud))
+        if sys.stdin is not None and sys.stdin.isatty() \
+                and input("Start it? [y/N] ").strip().lower() not in ("y", "yes"):
+            print("Not started.")
+            return
 
     trainer = create.create_trainer(train_config, callbacks, commands)
 

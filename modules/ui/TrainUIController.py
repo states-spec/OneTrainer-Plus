@@ -353,6 +353,13 @@ class TrainUIController:
                     and not self.view.confirm("Clear Cache Before Training", "Clear cache?"):
                 return
 
+            # a loaded config brings its cloud settings (install command, GPU, end actions) to your saved cloud login
+            if self.train_config.cloud.enabled and not self.view.confirm(
+                    "Cloud Training",
+                    "This training runs on a cloud machine, with your saved cloud login:\n\n"
+                    + self.train_config.cloud.describe_run(self.train_config.secrets.cloud) + "\n\nStart it?"):
+                return
+
             self.view.save_default()
             self.view.on_training_started()
 
