@@ -12,8 +12,9 @@ whose work it is built on are listed under [Credits](#credits).
 
 -   **Fixes**: training, saving and resuming problems found and fixed in this fork, among them optimizer settings with a
     fused back pass, EMA weights in intermediate saves, NaN losses from masked training with an empty area, timesteps
-    outside the noise schedule, LoRA files with layers outside the layer filter, and resuming from unfinished or
-    mismatched backups. Settings that can't work together are greyed out or stopped before the model loads.
+    outside the noise schedule, LoRA files with layers outside the layer filter, resuming from unfinished or mismatched
+    backups, and Nesterov momentum in PRODIGY_ADV. Settings that can't work together are greyed out or stopped before
+    the model loads.
 -   **AMD GPUs (ROCm)**: tested on a Radeon RX 7900 XTX with ROCm 7.2. Among others, attention with head size 512 (every
     VAE) runs on a correct kernel on RDNA3, and LARS works on bitsandbytes 0.49.2. `rocm_check` checks and measures a GPU
     setup ([docs/GpuCheck.md](docs/GpuCheck.md)); [docs/RocmVersionComparison.md](docs/RocmVersionComparison.md) compares
