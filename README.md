@@ -222,7 +222,8 @@ OneTrainer+ is built on the work of many people. Numbers such as #992 are pull r
     `*_ADV` optimizers such as ADOPT_ADV and PRODIGY_ADV) and contributed them to OneTrainer (#992), along with
     Kourkoutas-β (#1038), Huber loss (#1058), OFT v2 (#1073, #1135), Muon and AdaMuon (#1064, #1103), LoKr (#1464),
     generalized offset noise (#947), the BETA timestep distribution (#1225), scaled OFT (#1315) and, in preview-2,
-    DoRA-OFT (#1335) and the scaled optimizers, centered weight decay and factored second moment (#1344). From his own
+    DoRA-OFT (#1335) and the scaled optimizers, centered weight decay and factored second moment (#1344). He merged
+    the PRODIGY_ADV Nesterov fix sent from this fork into `adv_optm` 2.6.1. From his own
     OneTrainer fork, [Koratahiu/OneTrainer](https://github.com/Koratahiu/OneTrainer), OneTrainer+ ported:
     -   CIOP (coordinated input-output noise perturbation) and CEP (conditional embedding perturbation)
     -   Immiscible Diffusion noise sampling
