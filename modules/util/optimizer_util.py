@@ -540,7 +540,6 @@ OPTIMIZER_DEFAULT_PARAMETERS = {
         "orthogonal_gradient": "disabled",
         "spectral_normalization": False,
         "kourkoutas_beta": False,
-        # adv_optm's Nesterov step is broken for Prodigy; it runs with OneTrainer+'s fix (prodigy_adv_nesterov)
         "nesterov": False,
         "nesterov_coef": None,
         "compile": False,

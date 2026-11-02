@@ -43,8 +43,8 @@ results up to the check that was running (the report names it). The exit code is
    - every optimizer with the UI's default settings: created, stepped, saved and resumed like a backup (the resumed
      run has to match the uninterrupted one), and the fused back pass where it is supported (the bitsandbytes
      optimizers only on the GPU)
-   - PRODIGY_ADV's Nesterov step (adv_optm's own is broken; OneTrainer+ runs a fixed copy): with Prodigy's step size
-     D held fixed it has to match AdamW_adv's Nesterov step, and with Nesterov off adv_optm's step exactly
+   - PRODIGY_ADV's Nesterov step (broken before adv_optm 2.6.1): with Prodigy's step size D held fixed it has to
+     match AdamW_adv's Nesterov step
    - timestep sampling with every distribution, wide noising weights/biases and shifts: no sample outside the
      noise schedule (one past its end is a device-side assert, which aborts the process under ROCm)
    - layer and activation offloading through the real `LayerOffloadConductor`: same loss and gradients as without

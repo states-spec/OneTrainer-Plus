@@ -268,9 +268,9 @@ def _feature_variants() -> list[tuple[str, dict, list[str], dict]]:
     emb = {"dataset": "data_emb", "sample_prompt": "<emb> on a table"}
     return [
         ("PRODIGY_ADV", {"optimizer": {"optimizer": "PRODIGY_ADV"}, "learning_rate": 1.0}, [], {}),
-        # adv_optm's Nesterov step is broken for Prodigy (2.5.13 to 2.6.0); OneTrainer+ runs a fixed copy of it
+        # adv_optm's Nesterov step was broken for Prodigy before 2.6.1
         ("PRODIGY_ADV with Nesterov", {"optimizer": {"optimizer": "PRODIGY_ADV", "nesterov": True},
-                                       "learning_rate": 1.0}, [], {"expect": "Nesterov momentum runs with"}),
+                                       "learning_rate": 1.0}, [], {}),
         ("MUON_ADV", {"optimizer": {"optimizer": "MUON_ADV"}, "learning_rate": 1e-3}, [], {}),
         ("ADAMUON_ADV with the auxiliary Adam, DoRA",
          {"optimizer": {"optimizer": "ADAMUON_ADV", "MuonWithAuxAdam": True}, "lora_decompose": True,

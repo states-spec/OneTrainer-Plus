@@ -12,15 +12,15 @@ whose work it is built on are listed under [Credits](#credits).
 
 -   **Fixes**: training, saving and resuming problems found and fixed in this fork, among them optimizer settings with a
     fused back pass, EMA weights in intermediate saves, NaN losses from masked training with an empty area, timesteps
-    outside the noise schedule, LoRA files with layers outside the layer filter, resuming from unfinished or mismatched
-    backups, and Nesterov momentum in PRODIGY_ADV. Settings that can't work together are greyed out or stopped before
-    the model loads.
+    outside the noise schedule, LoRA files with layers outside the layer filter, and resuming from unfinished or
+    mismatched backups. Settings that can't work together are greyed out or stopped before the model loads.
 -   **AMD GPUs (ROCm)**: tested on a Radeon RX 7900 XTX with ROCm 7.2. Among others, attention with head size 512 (every
     VAE) runs on a correct kernel on RDNA3, and LARS works on bitsandbytes 0.49.2. `rocm_check` checks and measures a GPU
     setup ([docs/GpuCheck.md](docs/GpuCheck.md)); [docs/RocmVersionComparison.md](docs/RocmVersionComparison.md) compares
     PyTorch/ROCm builds.
--   **Optimizers**: Advanced_Optimizers (`adv_optm`) 2.6.0 with its 2.5 and 2.6 options (Scaled Weight Decay among
-    them), the parameter tags its optimizers need, and resumes that keep Prodigy's step size.
+-   **Optimizers**: Advanced_Optimizers (`adv_optm`) 2.6.1 with its 2.5 and 2.6 options (Scaled Weight Decay among
+    them), the parameter tags its optimizers need, and resumes that keep Prodigy's step size. The fix for Nesterov
+    momentum in PRODIGY_ADV was found here and merged into `adv_optm` 2.6.1.
 -   **Training options**: CIOP, CEP and Immiscible Diffusion noise, an exact OFT rotation (CANS), DoRA-OFT and OFT
     spectral norm clipping (all off by default), and stochastic rounding for bfloat16 EMA weights (on by default).
 -   **Cloud training** installs OneTrainer+ from this repository on the cloud machine (upstream's default installed
@@ -48,7 +48,7 @@ As of November 2026:
 -   **Based on** OneTrainer's master branch, with upstream's preview-2 branch ported up to #1756 and the features
     listed under [Credits](#credits).
 -   **Pinned stack**: Python 3.11 to 3.13, PyTorch 2.13.0 (ROCm 7.2, CUDA 12.6 or 13.0), bitsandbytes 0.49.2,
-    transformers 5.5.4, diffusers at a pinned commit, `adv_optm` 2.6.0, PySide6 6.11.2, Pillow 13.0.0.
+    transformers 5.5.4, diffusers at a pinned commit, `adv_optm` 2.6.1, PySide6 6.11.2, Pillow 13.0.0.
 -   **Tested on** an AMD Radeon RX 7900 XTX (gfx1100, ROCm 7.2) and on the CPU with `rocm_check`, which trains a
     small model through the real training script. NVIDIA GPUs aren't tested by this fork; upstream's CUDA support is
     unchanged.

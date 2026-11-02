@@ -310,35 +310,24 @@ def all_optimizers(ctx: Ctx, rec: Rec):
         rec.line(text)
 
 
-@check(SECTION, "PRODIGY_ADV Nesterov: the fixed step against AdamW_adv's Nesterov with D held fixed")
+@check(SECTION, "PRODIGY_ADV Nesterov: its step against AdamW_adv's Nesterov with D held fixed")
 def prodigy_adv_nesterov(ctx: Ctx, rec: Rec):
     # With D held at Initial D (d_coef 0), Prodigy is Adam without bias correction at learning rate D * lr: its
-    # moments are D and D^2 times Adam's. So its Nesterov step has to give AdamW_adv's Nesterov step. adv_optm's own
-    # Prodigy_adv mixes the raw gradient into its D-scaled momentum (2.5.13 to 2.6.0); OneTrainer+ runs a fixed copy
-    # of its step (modules/util/optimizer/prodigy_adv_nesterov.py)
-    from modules.util.optimizer.prodigy_adv_nesterov import nesterov_step_is_correct, prodigy_adv_class
-
+    # moments are D and D^2 times Adam's. So its Nesterov step has to give AdamW_adv's Nesterov step. Before 2.6.1,
+    # adv_optm's Prodigy_adv mixed the raw gradient into its D-scaled momentum (training refuses Nesterov there)
     import adv_optm
-    from adv_optm import AdamW_adv
+    from adv_optm import AdamW_adv, Prodigy_adv
 
-    prodigy_class, works = prodigy_adv_class()
-    own_correct = nesterov_step_is_correct(adv_optm.Prodigy_adv)
-    if not works:
-        rec.warn(f"adv_optm {adv_optm.__version__}: Prodigy_adv's Nesterov step is broken and OneTrainer+'s fix doesn't "
-                 f"match its code: PRODIGY_ADV trains with Nesterov turned off")
-        return
-    rec.line(f"adv_optm {adv_optm.__version__}: Prodigy_adv's own Nesterov step is "
-             f"{'correct, used as it is' if own_correct else 'broken: OneTrainer+ runs the fixed step'}")
     d0, lr, steps = 3e-4, 1.0, 40
 
-    def run(cls, nesterov, reference=False, **options):
+    def run(nesterov, reference=False, **options):
         g = torch.Generator().manual_seed(0)
         params = [nn.Parameter((torch.randn(32, 48, generator=g) * 0.1).to(ctx.device)),
                   nn.Parameter((torch.randn(48, generator=g) * 0.1).to(ctx.device))]
         start = [p.detach().clone() for p in params]
         common = dict(betas=(0.9, 0.99), eps=1e-8, nesterov=nesterov, stochastic_rounding=False, **options)
         optimizer = AdamW_adv(params, lr=d0 * lr, use_bias_correction=False, **common) if reference \
-            else cls(params, lr=lr, d0=d0, d_coef=0.0, **common)
+            else Prodigy_adv(params, lr=lr, d0=d0, d_coef=0.0, **common)
         g = torch.Generator().manual_seed(1)
         for _ in range(steps):
             for p in params:
@@ -348,19 +337,14 @@ def prodigy_adv_nesterov(ctx: Ctx, rec: Rec):
         moved = torch.cat([(p.detach() - s).flatten() for p, s in zip(params, start, strict=True)]).abs().max()
         return weights, moved.item()
 
+    rec.line(f"adv_optm {adv_optm.__version__}")
     for label, options in (("defaults", {}), ("coefficient 0.5", {"nesterov_coef": 0.5}),
                            ("factored state", {"state_precision": "factored"}), ("atan2", {"use_atan2": True})):
-        reference, moved = run(None, True, reference=True, **options)
-        fixed, _ = run(prodigy_class, True, **options)
-        own, _ = run(adv_optm.Prodigy_adv, True, **options)
-        err = (fixed - reference).abs().max().item() / moved
-        own_err = (own - reference).abs().max().item() / moved
+        reference, moved = run(True, reference=True, **options)
+        prodigy, _ = run(True, **options)
+        err = (prodigy - reference).abs().max().item() / moved
         rec.expect(err < 1e-4, f"{label}: Nesterov step vs AdamW_adv's after {steps} steps: {err:.1e} of the distance "
-                               f"moved (limit 1e-4; adv_optm's own step: {own_err:.1e})")
-    # with Nesterov off it is adv_optm's step, bit for bit
-    off_fixed, _ = run(prodigy_class, False)
-    off_own, _ = run(adv_optm.Prodigy_adv, False)
-    rec.expect(torch.equal(off_fixed, off_own), "Nesterov off: identical to adv_optm's Prodigy_adv")
+                               f"moved (limit 1e-4)")
 
 
 @check(SECTION, "timestep sampling stays inside the noise schedule (every distribution, wide settings, shifts)")

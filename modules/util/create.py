@@ -1,4 +1,5 @@
 import ast
+import functools
 import importlib
 from collections.abc import Iterable
 
@@ -278,26 +279,34 @@ def _restore_adv_optm_state_dtypes(optimizer: torch.optim.Optimizer, state_dict:
                     state[key] = saved_value.to(device=value.device, copy=True)
 
 
-# adv_optm's Prodigy_adv (2.5.13-2.6.0) keeps its momentum scaled by d, but its Nesterov step mixes in the unscaled gradient
-# (exp_avg.lerp_(grad, 1 - coef)). That term is 1/d times too large, so every step moves each weight by about
-# 0.1 * lr whatever d is: at lr 1 a LoRA turned to noise within the first steps. prodigy_adv_nesterov builds the fixed
-# step from adv_optm's own code; this is what happens if it can't (an adv_optm whose code no longer matches the fix)
-_PRODIGY_ADV_NESTEROV = ("Nesterov momentum is broken in this adv_optm's PRODIGY_ADV, and OneTrainer+'s fix doesn't "
-                         "match its code: it moves every weight by about 0.1 x the learning rate per step regardless of "
-                         "Prodigy's step size, which destroys the model")
+# adv_optm's Prodigy_adv before 2.6.1 (2.5.13-2.6.0 and the 2.6.x pre-releases) keeps its momentum scaled by d, but its
+# Nesterov step mixed in the unscaled gradient (exp_avg.lerp_(grad, 1 - coef)), a term 1/d times too large: every step
+# moved each weight by about 0.1 * lr whatever d was, and at lr 1 a LoRA turned to noise within the first steps.
+# 2.6.1 scales it by d. A venv updated with git pull but not update.sh can still have the old step
+_PRODIGY_ADV_NESTEROV = ("Nesterov momentum in PRODIGY_ADV needs adv_optm 2.6.1 (earlier versions move every weight by "
+                         "about 0.1 x the learning rate per step regardless of Prodigy's step size, which destroys the "
+                         "model), but {} is installed. Run update.sh (update.bat on Windows) to install the current "
+                         "requirements")
 
 
+@functools.cache
 def _prodigy_adv_nesterov_works() -> bool:
-    from modules.util.optimizer.prodigy_adv_nesterov import prodigy_adv_class
-    return prodigy_adv_class()[1]
+    # one step from D = Initial D = 1e-6 at learning rate 1 with a constant gradient. A correct step moves each weight
+    # by about 2e-6 (Nesterov's 0.19 * d * g over sqrt(v) = 0.1 * d * |g|, times d * lr); the broken one by about 1
+    from adv_optm import Prodigy_adv
+
+    p = torch.nn.Parameter(torch.full((4, 4), 0.1))
+    optimizer = Prodigy_adv([p], lr=1.0, d0=1e-6, betas=(0.9, 0.99), nesterov=True, stochastic_rounding=False)
+    p.grad = torch.ones_like(p)
+    optimizer.step()
+    return (p.detach() - 0.1).abs().max().item() < 1e-3
 
 
 def check_optimizer_config(optimizer_config: TrainOptimizerConfig):
-    # turns off settings known to break training; GenericTrainer.start calls it before the model loads
+    # refuses settings known to break training; GenericTrainer.start calls it before the model loads
     if optimizer_config.optimizer == Optimizer.PRODIGY_ADV and optimizer_config.nesterov \
             and not _prodigy_adv_nesterov_works():
-        print(f"Warning: {_PRODIGY_ADV_NESTEROV}. The config has it on; it is turned off for this run.")
-        optimizer_config.nesterov = False
+        raise ValueError(_PRODIGY_ADV_NESTEROV.format(_adv_optm_version()) + ", or turn Nesterov off.")
 
     if optimizer_config.optimizer.is_adv_optm and optimizer_config.scaled_wd and not _adv_optm_has_scaled_wd():
         raise ValueError(f"Scaled Weight Decay needs adv_optm 2.6.0, but {_adv_optm_version()} is installed. Run "
@@ -325,12 +334,11 @@ def check_optimizer_config(optimizer_config: TrainOptimizerConfig):
                              f'the optimizer settings, or turn {" and ".join(needing)} off.')
 
 
-def _disable_prodigy_adv_nesterov(optimizer: torch.optim.Optimizer):
-    # a resumed group keeps the backup's settings, so a backup made with Nesterov on would still use it
-    if not _prodigy_adv_nesterov_works() and any(group.get('nesterov') for group in optimizer.param_groups):
-        print(f"Warning: {_PRODIGY_ADV_NESTEROV}. The backup was made with it on; it is turned off for this run.")
-        for group in optimizer.param_groups:
-            group['nesterov'] = False
+def _check_resumed_prodigy_adv_nesterov(optimizer: torch.optim.Optimizer):
+    # a resumed group keeps the backup's settings, so a backup made with Nesterov on still uses it
+    if any(group.get('nesterov') for group in optimizer.param_groups) and not _prodigy_adv_nesterov_works():
+        raise ValueError(_PRODIGY_ADV_NESTEROV.format(_adv_optm_version()) + ". The backup was made with Nesterov "
+                         "on, and a resumed backup keeps its optimizer settings.")
 
 
 def _effective_snr_cond(optimizer_config: TrainOptimizerConfig) -> bool:
@@ -998,15 +1006,9 @@ def create_optimizer(
 
         # PRODIGY_ADV Optimizer
         case Optimizer.PRODIGY_ADV:
-            from modules.util.optimizer import prodigy_adv_nesterov
-            # the fixed class runs every PRODIGY_ADV training while the installed adv_optm has the bug: a resumed
-            # backup can have Nesterov on although the config hasn't, and with Nesterov off it is adv_optm's own step
-            prodigy_class = prodigy_adv_nesterov.prodigy_adv_class()[0]
+            from adv_optm import Prodigy_adv
             check_optimizer_config(optimizer_config)
-            if optimizer_config.nesterov and prodigy_class.__module__ == prodigy_adv_nesterov.__name__:
-                print(f"Note: PRODIGY_ADV's Nesterov momentum runs with OneTrainer+'s fix for adv_optm "
-                      f"{_adv_optm_version()} (its gradient term scaled by Prodigy's step size D).")
-            optimizer = prodigy_class(
+            optimizer = Prodigy_adv(
                 params=parameters,
                 lr=config.learning_rate,
                 betas=(optimizer_config.beta1 if optimizer_config.beta1 is not None else 0,
@@ -1450,7 +1452,7 @@ def create_optimizer(
             _restore_kourkoutas_helper(optimizer)
             _drop_mismatched_kourkoutas_state(optimizer)
             if optimizer_config.optimizer == Optimizer.PRODIGY_ADV:
-                _disable_prodigy_adv_nesterov(optimizer)
+                _check_resumed_prodigy_adv_nesterov(optimizer)
 
         if optimizer_config.optimizer.is_adaptive:
             stuck = [group for group in d_at_initial_groups(optimizer, min_steps=20) if group[3] <= 0]
