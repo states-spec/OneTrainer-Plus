@@ -9,6 +9,7 @@ from modules.cloud.BaseCloud import BaseCloud
 from modules.cloud.FabricFileSync import FabricFileSync
 from modules.cloud.NativeSCPFileSync import NativeSCPFileSync
 from modules.cloud.ssh_host_keys import HostKeys
+from modules.util import git_util
 from modules.util.app_info import APP_NAME
 from modules.util.callbacks.TrainCallbacks import TrainCallbacks
 from modules.util.commands.TrainCommands import TrainCommands
@@ -111,13 +112,41 @@ class LinuxCloud(BaseCloud):
                    && export OT_LAZY_UPDATES=true \
                    && cd {shlex.quote(config.onetrainer_dir)}"
 
-        if result.exited == 0:
-            if update:
-                # updating can switch a dependency's git remote (e.g. a different fork/branch),
-                # which makes pip prompt interactively unless told to always wipe and re-clone.
-                self.connection.run(cmd_env + "&& export PIP_EXISTS_ACTION=w && ./update.sh", in_stream=False)
+        installed=result.exited == 0
+        if installed and not update:
+            return
+        pinned=self.__checkout_local_commit()
+        if installed:
+            # updating can switch a dependency's git remote (e.g. a different fork/branch),
+            # which makes pip prompt interactively unless told to always wipe and re-clone.
+            # With the commit checked out, update.sh only updates the requirements (no git pull).
+            skip_pull=" && export OT_UPDATE_SKIP_GIT_PULL=true" if pinned else ""
+            self.connection.run(cmd_env + f"&& export PIP_EXISTS_ACTION=w{skip_pull} && ./update.sh", in_stream=False)
         else:
             self.connection.run(cmd_env + "&& ./install.sh", in_stream=False)
+
+    def __checkout_local_commit(self) -> bool:
+        #The cloud machine runs the commit this PC runs, if its repository has it: the same code on both ends
+        #(config format, cloud messages), and not whatever its branch got since. Otherwise it stays on the newest
+        #commit of its branch, as before.
+        commit=git_util.get_git_commit()
+        if commit is None:
+            return False
+        onetrainer_dir=shlex.quote(self.config.cloud.onetrainer_dir)
+        result=self.connection.run(f"git -C {onetrainer_dir} fetch --quiet origin {commit} \
+                                     && git -C {onetrainer_dir} checkout --quiet --detach {commit}",
+                                   warn=True,in_stream=False)
+        if result.exited == 0:
+            uncommitted=" (this PC's uncommitted changes don't go along)" if git_util.has_uncommitted_changes() else ""
+            print(f"Cloud: running {APP_NAME} at this PC's commit {commit[:10]}{uncommitted}")
+            return True
+        print(f"Cloud: the cloud machine's repository doesn't have this PC's commit {commit[:10]} (not pushed?), "
+              f"so it runs the newest commit of its branch")
+        #an earlier run may have left a detached HEAD, which git pull (update.sh) refuses
+        self.connection.run(f"git -C {onetrainer_dir} checkout --quiet \
+                              \"$(git -C {onetrainer_dir} rev-parse --abbrev-ref origin/HEAD | sed 's|^origin/||')\"",
+                            warn=True,in_stream=False)
+        return False
 
     def _make_tensorboard_tunnel(self):
         self.tensorboard_tunnel_stop=threading.Event()
