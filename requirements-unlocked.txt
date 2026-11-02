@@ -1,0 +1,14 @@
+# Installed without hash checking. install.sh and update.sh install requirements-lock/<platform file> first (every
+# other package, including the dependencies of these, with the SHA-256 of each file), then this file without
+# dependencies. After changing it, make the lock files again: python scripts/util/requirements_lock.py lock
+
+# git dependencies are pinned by their full commit hash: pip takes a short one for a branch or tag of that name
+# first, so such a ref in the repository would replace the pinned commit
+# diffusion models
+-e git+https://github.com/huggingface/diffusers.git@1ffa4236a48af8d1d2eaeed6c84027af19acfc39#egg=diffusers
+# data loader
+-e git+https://github.com/Nerogar/mgds.git@3a6994ad18a490acc4f3876658167525b7d88da7#egg=mgds
+# Muon optimizer
+-e git+https://github.com/KellerJordan/Muon.git@f90a42b28e00b8d9d2d05865fe90d9f39abcbcbd#egg=muon-optimizer
+
+yt-dlp  #no pinned version, frequently updated for compatibility with sites

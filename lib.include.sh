@@ -29,6 +29,7 @@ export OT_LAZY_UPDATES="${OT_LAZY_UPDATES:-false}"
 export OT_CUDA_LOWMEM_MODE="${OT_CUDA_LOWMEM_MODE:-false}"
 export OT_EXPANDABLE_SEGMENTS="${OT_EXPANDABLE_SEGMENTS:-false}"
 export OT_PLATFORM_REQUIREMENTS="${OT_PLATFORM_REQUIREMENTS:-detect}"
+export OT_LOCKED_REQUIREMENTS="${OT_LOCKED_REQUIREMENTS:-true}"
 export OT_SCRIPT_DEBUG="${OT_SCRIPT_DEBUG:-false}"
 
 # Internal environment variables.
@@ -393,13 +394,34 @@ function get_platform_requirements_path {
 
 # Installs the Global and Platform requirements into the active environment.
 function install_requirements_in_active_env {
-    # Ensure that we have the latest Python tools, and install the dependencies.
-    # NOTE: The "eager" upgrade strategy is necessary for upgrading dependencies
-    # when running in existing environments. It ensures that all libraries will
-    # be upgraded to the same versions as a fresh reinstall of requirements.txt.
     print "Installing requirements in active environment..."
-    run_pip_in_active_env install --upgrade --upgrade-strategy eager pip setuptools==84.2.1
-    run_pip_in_active_env install --upgrade --upgrade-strategy eager -r requirements-global.txt -r "$(get_platform_requirements_path)"
+    local platform_reqs
+    platform_reqs="$(get_platform_requirements_path)"
+
+    local locked="false"
+    if [[ "${OT_LOCKED_REQUIREMENTS}" != "true" ]]; then
+        print "OT_LOCKED_REQUIREMENTS is \"${OT_LOCKED_REQUIREMENTS}\": installing the requirements without hash checking."
+    elif run_python_in_active_env "scripts/util/requirements_lock.py" check "${platform_reqs}"; then
+        locked="true"
+    fi
+
+    if [[ "${locked}" == "true" ]]; then
+        # Hash-locked install (requirements-lock/, made by scripts/util/requirements_lock.py): every package at the
+        # version in the lock file, each download checked against its SHA-256, so a file replaced on PyPI or the
+        # PyTorch index, or a newer release, is never installed. The build tools come first: packages built from
+        # source then build with them instead of in pip's isolated build environments, whose downloads pip doesn't
+        # hash-check. The git packages and yt-dlp come last, without dependencies (those are in the lock file).
+        run_pip_in_active_env install --require-hashes -r requirements-lock/build-tools.txt
+        run_pip_in_active_env install --require-hashes --no-build-isolation -r "requirements-lock/${platform_reqs##*/}"
+        run_pip_in_active_env install --upgrade --no-deps --no-build-isolation -r requirements-unlocked.txt
+    else
+        # Ensure that we have the latest Python tools, and install the dependencies.
+        # NOTE: The "eager" upgrade strategy is necessary for upgrading dependencies
+        # when running in existing environments. It ensures that all libraries will
+        # be upgraded to the same versions as a fresh reinstall of requirements.txt.
+        run_pip_in_active_env install --upgrade --upgrade-strategy eager pip setuptools==84.2.1
+        run_pip_in_active_env install --upgrade --upgrade-strategy eager -r requirements-global.txt -r "${platform_reqs}"
+    fi
     export OT_MUST_INSTALL_REQUIREMENTS="false"
 
     # Write update-check metadata to disk if user has requested "lazy updates",
