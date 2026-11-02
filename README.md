@@ -43,8 +43,7 @@ whose work it is built on are listed under [Credits](#credits).
 As of November 2026:
 
 -   **Branches**: `master` is the tested state. New work lands on `nightly` first and is merged into `master` once it
-    has been checked. `lock-filing` holds hash-locked installs (every package, including PyTorch, checked against a
-    pinned hash during `install.sh`/`update.sh`), which are not merged yet.
+    has been checked.
 -   **Based on** OneTrainer's master branch, with upstream's preview-2 branch ported up to #1756 and the features
     listed under [Credits](#credits).
 -   **Pinned stack**: Python 3.11 to 3.13, PyTorch 2.13.0 (ROCm 7.2, CUDA 12.6 or 13.0), bitsandbytes 0.49.2,
