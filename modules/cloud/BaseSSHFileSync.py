@@ -3,18 +3,15 @@ from abc import abstractmethod
 from pathlib import Path
 
 from modules.cloud.BaseFileSync import BaseFileSync
+from modules.cloud.ssh_host_keys import HostKeys
 from modules.util.config.CloudConfig import CloudConfig, CloudSecretsConfig
-
-import fabric
 
 
 class BaseSSHFileSync(BaseFileSync):
-    def __init__(self, config: CloudConfig, secrets: CloudSecretsConfig):
+    def __init__(self, config: CloudConfig, secrets: CloudSecretsConfig, host_keys: HostKeys):
         super().__init__(config, secrets)
-        self.sync_connection=fabric.Connection(host=secrets.host,
-                               port=secrets.port,
-                               user=secrets.user,
-                               connect_kwargs=secrets.connect_kwargs())
+        self.host_keys=host_keys
+        self.sync_connection=host_keys.connection(secrets.host,secrets.port,secrets.user,secrets.connect_kwargs())
 
     def close(self):
         if self.sync_connection:
@@ -80,6 +77,11 @@ class BaseSSHFileSync(BaseFileSync):
         sync_info=self.__get_sync_info(remote)
         dirs={}
         for remote_entry in sync_info:
+            #the file list comes from the cloud machine: an entry outside remote, or one whose path climbs out
+            #with "..", would be written outside the local folder (relative_to keeps "..")
+            if not remote_entry.is_relative_to(remote) or ".." in remote_entry.relative_to(remote).parts:
+                print(f"Skipped downloading {remote_entry}: it is not inside {remote} on the cloud machine")
+                continue
             local_entry=local / remote_entry.relative_to(remote)
             if ((filter is not None and not filter(remote_entry))
                 or not self.__needs_download(local=local_entry,remote=remote_entry,sync_info=sync_info)):
@@ -101,10 +103,13 @@ class BaseSSHFileSync(BaseFileSync):
         info={}
         for line in result.stdout.splitlines():
             sp=line.split('\t')
-            info[Path(sp[0])]={
-                    'size': int(sp[1]),
-                    'mtime': int(sp[2])
-                }
+            try:
+                info[Path(sp[0])]={
+                        'size': int(sp[1]),
+                        'mtime': int(sp[2])
+                    }
+            except (IndexError, ValueError):
+                print(f"Skipped an unreadable line of the cloud machine's file list: {line!r}")
         return info
 
     @staticmethod

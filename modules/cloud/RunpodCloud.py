@@ -9,6 +9,9 @@ import runpod
 
 
 class RunpodCloud(LinuxCloud):
+    #a new pod has a new key: pin the first one for the rest of the run (see ssh_host_keys)
+    TRUST_FIRST_HOST_KEY=True
+
     def __init__(self, config: TrainConfig):
         super().__init__(config)
 

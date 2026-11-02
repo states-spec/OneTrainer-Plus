@@ -6,6 +6,7 @@ from modules.cloud import cloud_messages
 from modules.cloud.BaseCloud import BaseCloud
 from modules.cloud.FabricFileSync import FabricFileSync
 from modules.cloud.NativeSCPFileSync import NativeSCPFileSync
+from modules.cloud.ssh_host_keys import HostKeys
 from modules.util.app_info import APP_NAME
 from modules.util.callbacks.TrainCallbacks import TrainCallbacks
 from modules.util.commands.TrainCommands import TrainCommands
@@ -18,12 +19,16 @@ import fabric
 
 
 class LinuxCloud(BaseCloud):
+    #a Linux cloud is a server you know: its key has to be in ~/.ssh/known_hosts (see ssh_host_keys)
+    TRUST_FIRST_HOST_KEY=False
+
     def __init__(self, config: TrainConfig):
         super().__init__(config)
         self.connection=None
         self.callback_connection=None
         self.command_connection=None
         self.tensorboard_tunnel_stop=None
+        self.host_keys=HostKeys(trust_first_key=self.TRUST_FIRST_HOST_KEY)
 
         name=config.cloud.run_id if config.cloud.detach_trainer else get_string_timestamp()
         self.callback_file=f'{config.cloud.remote_dir}/{name}.callback'
@@ -45,31 +50,24 @@ class LinuxCloud(BaseCloud):
             raise ValueError('Host and port required for SSH connection')
 
         try:
-            self.connection=fabric.Connection(host=secrets.host,
-                                             port=secrets.port,
-                                             user=secrets.user,
-                                             connect_kwargs=connect_kwargs)
+            self.connection=self.host_keys.connection(secrets.host,secrets.port,secrets.user,connect_kwargs)
             self.connection.open()
+            #RunPod: every later connection of this run has to present the key this one did
+            self.host_keys.pin(self.connection)
             self.connection.transport.set_keepalive(30)
 
-            self.callback_connection=fabric.Connection(host=secrets.host,
-                                                       port=secrets.port,
-                                                       user=secrets.user,
-                                                       connect_kwargs=connect_kwargs)
+            self.callback_connection=self.host_keys.connection(secrets.host,secrets.port,secrets.user,connect_kwargs)
 
-            self.command_connection=fabric.Connection(host=secrets.host,
-                                                      port=secrets.port,
-                                                      user=secrets.user,
-                                                      connect_kwargs=connect_kwargs)
+            self.command_connection=self.host_keys.connection(secrets.host,secrets.port,secrets.user,connect_kwargs)
             #the command connection isn't used for long periods of time; prevent remote from closing it:
             self.command_connection.open()
             self.command_connection.transport.set_keepalive(30)
 
             match config.file_sync:
                 case CloudFileSync.NATIVE_SCP:
-                    self.file_sync=NativeSCPFileSync(config,secrets)
+                    self.file_sync=NativeSCPFileSync(config,secrets,self.host_keys)
                 case CloudFileSync.FABRIC_SFTP:
-                    self.file_sync=FabricFileSync(config,secrets)
+                    self.file_sync=FabricFileSync(config,secrets,self.host_keys)
 
         except Exception:
             if self.connection:
@@ -143,6 +141,7 @@ class LinuxCloud(BaseCloud):
         if self.connection:
             self.connection.close()
             self.connection=None
+        self.host_keys.close()
 
     def can_reattach(self):
         result=self.connection.run(f"test -f {self.pid_file}",warn=True,in_stream=False)
