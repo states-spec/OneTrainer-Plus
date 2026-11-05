@@ -279,48 +279,76 @@ def _restore_adv_optm_state_dtypes(optimizer: torch.optim.Optimizer, state_dict:
                     state[key] = saved_value.to(device=value.device, copy=True)
 
 
-# adv_optm's Prodigy_adv before 2.6.1 (2.5.13-2.6.0 and the 2.6.x pre-releases) keeps its momentum scaled by d, but its
-# Nesterov step mixed in the unscaled gradient (exp_avg.lerp_(grad, 1 - coef)), a term 1/d times too large: every step
-# moved each weight by about 0.1 * lr whatever d was, and at lr 1 a LoRA turned to noise within the first steps.
-# 2.6.1 scales it by d. A venv updated with git pull but not update.sh can still have the old step
-_PRODIGY_ADV_NESTEROV = ("Nesterov momentum in PRODIGY_ADV needs adv_optm 2.6.1 (earlier versions move every weight by "
-                         "about 0.1 x the learning rate per step regardless of Prodigy's step size, which destroys the "
-                         "model), but {} is installed. Run update.sh (update.bat on Windows) to install the current "
-                         "requirements")
+# Nesterov momentum was broken in two adv_optm optimizers, and a venv updated with git pull but not update.sh can still
+# have the old step, so a one-step probe of the installed class decides:
+# - Prodigy_adv before 2.6.1 (2.5.13-2.6.0 and the 2.6.x pre-releases) keeps its momentum scaled by d, but its Nesterov
+#   step mixed in the unscaled gradient (exp_avg.lerp_(grad, 1 - coef)), a term 1/d times too large: every step moved
+#   each weight by about 0.1 * lr whatever d was, and at lr 1 a LoRA turned to noise within the first steps.
+# - Adopt_adv before 2.6.2 keeps its momentum in normalized-gradient units (grad / sqrt(v)), but its Nesterov step mixed
+#   in the raw gradient: with small gradients (a LoRA's) Nesterov only shrank the step by 10%, with large ones the step
+#   was 12-18x too large and turned (50 steps on a 64x64 weight, gradient scale 1e-4 vs 100).
+_NESTEROV_FIXED_IN = {Optimizer.PRODIGY_ADV: "2.6.1", Optimizer.ADOPT_ADV: "2.6.2"}
+_NESTEROV_BROKEN = ("Nesterov momentum in {optimizer} needs adv_optm {fixed} (earlier versions mix the raw gradient into "
+                    "its momentum, {effect}), but {installed} is installed. Run update.sh (update.bat on Windows) to "
+                    "install the current requirements")
+_NESTEROV_EFFECT = {
+    Optimizer.PRODIGY_ADV: "which moves every weight by about 0.1 x the learning rate per step regardless of "
+                           "Prodigy's step size and destroys the model",
+    Optimizer.ADOPT_ADV: "so its step depends on the gradient's scale: about 10% smaller with small gradients, many "
+                         "times too large with large ones",
+}
 
 
 @functools.cache
-def _prodigy_adv_nesterov_works() -> bool:
-    # one step from D = Initial D = 1e-6 at learning rate 1 with a constant gradient. A correct step moves each weight
-    # by about 2e-6 (Nesterov's 0.19 * d * g over sqrt(v) = 0.1 * d * |g|, times d * lr); the broken one by about 1
-    from adv_optm import Prodigy_adv
+def _adv_nesterov_works(optimizer: Optimizer) -> bool:
+    import adv_optm
 
-    p = torch.nn.Parameter(torch.full((4, 4), 0.1))
-    optimizer = Prodigy_adv([p], lr=1.0, d0=1e-6, betas=(0.9, 0.99), nesterov=True, stochastic_rounding=False)
-    p.grad = torch.ones_like(p)
-    optimizer.step()
-    return (p.detach() - 0.1).abs().max().item() < 1e-3
+    if optimizer == Optimizer.PRODIGY_ADV:
+        # one step from D = Initial D = 1e-6 at learning rate 1 with a constant gradient. A correct step moves each
+        # weight by about 2e-6 (Nesterov's 0.19 * d * g over sqrt(v) = 0.1 * d * |g|, times d * lr); the broken one by
+        # about 1
+        p = torch.nn.Parameter(torch.full((4, 4), 0.1))
+        opt = adv_optm.Prodigy_adv([p], lr=1.0, d0=1e-6, betas=(0.9, 0.99), nesterov=True, stochastic_rounding=False)
+        p.grad = torch.ones_like(p)
+        opt.step()
+        return (p.detach() - 0.1).abs().max().item() < 1e-3
+
+    # ADOPT normalizes the gradient, so the same gradients scaled by 1e4 have to move the weights the same way; the
+    # broken Nesterov term grows with the scale
+    def moved(scale: float) -> torch.Tensor:
+        p = torch.nn.Parameter(torch.zeros(4, 4))
+        opt = adv_optm.Adopt_adv([p], lr=1e-3, nesterov=True, use_atan2=False, stochastic_rounding=False)
+        for step in range(3):
+            p.grad = torch.linspace(-1.0, 1.0, 16).view(4, 4).roll(step) * scale
+            opt.step()
+        return p.detach().clone()
+
+    small, large = moved(1.0), moved(1e4)
+    return torch.allclose(small, large, rtol=1e-3, atol=1e-7)
+
+
+def _nesterov_broken_message(optimizer: Optimizer) -> str:
+    return _NESTEROV_BROKEN.format(optimizer=optimizer, fixed=_NESTEROV_FIXED_IN[optimizer],
+                                   effect=_NESTEROV_EFFECT[optimizer], installed=_adv_optm_version())
 
 
 def check_optimizer_config(optimizer_config: TrainOptimizerConfig):
     # refuses settings known to break training; GenericTrainer.start calls it before the model loads
-    if optimizer_config.optimizer == Optimizer.PRODIGY_ADV and optimizer_config.nesterov \
-            and not _prodigy_adv_nesterov_works():
-        raise ValueError(_PRODIGY_ADV_NESTEROV.format(_adv_optm_version()) + ", or turn Nesterov off.")
+    if optimizer_config.optimizer in _NESTEROV_FIXED_IN and optimizer_config.nesterov \
+            and not _adv_nesterov_works(optimizer_config.optimizer):
+        raise ValueError(_nesterov_broken_message(optimizer_config.optimizer) + ", or turn Nesterov off.")
 
     if optimizer_config.optimizer.is_adv_optm and optimizer_config.scaled_wd and not _adv_optm_has_scaled_wd():
         raise ValueError(f"Scaled Weight Decay needs adv_optm 2.6.0, but {_adv_optm_version()} is installed. Run "
                          f"update.sh (update.bat on Windows) to install the current requirements.")
 
-    # adv_optm 2.5.13-2.6.0: Adopt_adv's fp16 state fails in its first step together with these (a dtype error,
-    # "expected dtype c10::Half for `end`"), after the model has loaded and the cache is built
-    if optimizer_config.optimizer == Optimizer.ADOPT_ADV and (optimizer_config.state_precision or "").lower() == "fp16":
-        clashing = [title for title, on in (("Nesterov", optimizer_config.nesterov),
-                                            ("Factored 2nd Moment", optimizer_config.factored_2nd)) if on]
-        if clashing:
-            raise ValueError(f'State Precision "fp16" does not work with {" or ".join(clashing)} in ADOPT_ADV: '
-                             f'adv_optm fails in the first step. Pick another State Precision, or turn '
-                             f'{" and ".join(clashing)} off.')
+    # adv_optm 2.5.13-2.6.3: Adopt_adv's fp16 state fails in its first step together with Factored 2nd Moment (a dtype
+    # error, "expected dtype c10::Half for `end`"), after the model has loaded and the cache is built. Nesterov failed
+    # the same way up to 2.6.1; 2.6.2's Nesterov fix made it work (older versions are refused above)
+    if optimizer_config.optimizer == Optimizer.ADOPT_ADV and (optimizer_config.state_precision or "").lower() == "fp16" \
+            and optimizer_config.factored_2nd:
+        raise ValueError('State Precision "fp16" does not work with Factored 2nd Moment in ADOPT_ADV: adv_optm fails '
+                         'in the first step. Pick another State Precision, or turn Factored 2nd Moment off.')
 
     # torch's fused and foreach Adam(W) steps can't step one parameter at a time or round stochastically.
     # create_optimizer refuses that too, but only after the model has loaded
@@ -334,11 +362,11 @@ def check_optimizer_config(optimizer_config: TrainOptimizerConfig):
                              f'the optimizer settings, or turn {" and ".join(needing)} off.')
 
 
-def _check_resumed_prodigy_adv_nesterov(optimizer: torch.optim.Optimizer):
+def _check_resumed_adv_nesterov(optimizer: torch.optim.Optimizer, optimizer_type: Optimizer):
     # a resumed group keeps the backup's settings, so a backup made with Nesterov on still uses it
-    if any(group.get('nesterov') for group in optimizer.param_groups) and not _prodigy_adv_nesterov_works():
-        raise ValueError(_PRODIGY_ADV_NESTEROV.format(_adv_optm_version()) + ". The backup was made with Nesterov "
-                         "on, and a resumed backup keeps its optimizer settings.")
+    if any(group.get('nesterov') for group in optimizer.param_groups) and not _adv_nesterov_works(optimizer_type):
+        raise ValueError(_nesterov_broken_message(optimizer_type) + ". The backup was made with Nesterov on, and a "
+                         "resumed backup keeps its optimizer settings.")
 
 
 def _effective_snr_cond(optimizer_config: TrainOptimizerConfig) -> bool:
@@ -1451,8 +1479,8 @@ def create_optimizer(
             _restore_adv_optm_state_dtypes(optimizer, state_dict)
             _restore_kourkoutas_helper(optimizer)
             _drop_mismatched_kourkoutas_state(optimizer)
-            if optimizer_config.optimizer == Optimizer.PRODIGY_ADV:
-                _check_resumed_prodigy_adv_nesterov(optimizer)
+            if optimizer_config.optimizer in _NESTEROV_FIXED_IN:
+                _check_resumed_adv_nesterov(optimizer, optimizer_config.optimizer)
 
         if optimizer_config.optimizer.is_adaptive:
             stuck = [group for group in d_at_initial_groups(optimizer, min_steps=20) if group[3] <= 0]

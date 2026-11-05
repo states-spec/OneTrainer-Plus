@@ -347,6 +347,37 @@ def prodigy_adv_nesterov(ctx: Ctx, rec: Rec):
                                f"moved (limit 1e-4)")
 
 
+@check(SECTION, "ADOPT_ADV Nesterov: the same step at gradient scales 1e-2 and 1e2")
+def adopt_adv_nesterov(ctx: Ctx, rec: Rec):
+    # ADOPT normalizes the gradient by its running second moment, so the same gradients scaled by any factor move the
+    # weights the same way, and its Nesterov step has to keep that. Before adv_optm 2.6.2 it mixed the raw gradient into
+    # the normalized momentum: Nesterov then only shrank the step with small gradients and blew it up with large ones
+    # (training refuses Nesterov there)
+    import adv_optm
+    from adv_optm import Adopt_adv
+
+    def run(scale, **options):
+        g = torch.Generator().manual_seed(0)
+        params = [nn.Parameter((torch.randn(32, 48, generator=g) * 0.1).to(ctx.device)),
+                  nn.Parameter((torch.randn(48, generator=g) * 0.1).to(ctx.device))]
+        start = [p.detach().clone() for p in params]
+        optimizer = Adopt_adv(params, lr=1e-3, nesterov=True, stochastic_rounding=False, **options)
+        g = torch.Generator().manual_seed(1)
+        for _ in range(30):
+            for p in params:
+                p.grad = (torch.randn(p.shape, generator=g) * scale).to(ctx.device)
+            optimizer.step()
+        return torch.cat([(p.detach() - s).flatten() for p, s in zip(params, start, strict=True)])
+
+    rec.line(f"adv_optm {adv_optm.__version__}")
+    for label, options in (("defaults", {}), ("atan2", {"use_atan2": True}), ("coefficient 0.5", {"nesterov_coef": 0.5}),
+                           ("factored state", {"state_precision": "factored"})):
+        small, large = run(1e-2, **options), run(1e2, **options)
+        err = ((large - small).abs().max() / small.abs().max()).item()
+        rec.expect(err < 1e-3, f"{label}: step at gradient scale 1e2 vs 1e-2: {err:.1e} of the distance moved "
+                               f"(limit 1e-3)")
+
+
 @check(SECTION, "timestep sampling stays inside the noise schedule (every distribution, wide settings, shifts)")
 def timestep_range(ctx: Ctx, rec: Rec):
     from modules.modelSetup.mixin.ModelSetupNoiseMixin import ModelSetupNoiseMixin

@@ -292,6 +292,11 @@ def _feature_variants() -> list[tuple[str, dict, list[str], dict]]:
          {"peft_type": "OFT_2", "oft_block_size": 8, "optimizer": {"optimizer": "SINKSGD_ADV"},
           "additional_embeddings": [_EMBEDDING], "learning_rate": 1e-3}, [],
          {**emb, "round_trip": True, "expect": "skew-symmetric Sinkhorn"}),
+        # adv_optm's Nesterov step was broken for ADOPT before 2.6.2
+        ("ADOPT_ADV with Nesterov", {"optimizer": {"optimizer": "ADOPT_ADV", "nesterov": True}}, [], {}),
+        # adv_optm 2.6.3 moved Kourkoutas-beta's gradient-norm bookkeeping out of the step
+        ("ADOPT_ADV with Kourkoutas-beta", {"optimizer": {"optimizer": "ADOPT_ADV", "kourkoutas_beta": True},
+                                            "learning_rate_warmup_steps": 4}, [], {}),
         ("ADOPT_ADV with scaled weight decay",
          {"optimizer": {"optimizer": "ADOPT_ADV", "weight_decay": 0.1, "scaled_wd": True}}, [], {}),
         ("embedding training", {"training_method": "EMBEDDING", "output_model_format": "SAFETENSORS",

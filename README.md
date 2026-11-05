@@ -18,9 +18,9 @@ whose work it is built on are listed under [Credits](#credits).
     VAE) runs on a correct kernel on RDNA3, and LARS works on bitsandbytes 0.49.2. `rocm_check` checks and measures a GPU
     setup ([docs/GpuCheck.md](docs/GpuCheck.md)); [docs/RocmVersionComparison.md](docs/RocmVersionComparison.md) compares
     PyTorch/ROCm builds.
--   **Optimizers**: Advanced_Optimizers (`adv_optm`) 2.6.1 with its 2.5 and 2.6 options (Scaled Weight Decay among
+-   **Optimizers**: Advanced_Optimizers (`adv_optm`) 2.6.3 with its 2.5 and 2.6 options (Scaled Weight Decay among
     them), the parameter tags its optimizers need, and resumes that keep Prodigy's step size. The fix for Nesterov
-    momentum in PRODIGY_ADV was found here and merged into `adv_optm` 2.6.1.
+    momentum in PRODIGY_ADV was found here and merged into `adv_optm` 2.6.1; 2.6.2 fixed it in ADOPT_ADV too.
 -   **Training options**: CIOP, CEP and Immiscible Diffusion noise, an exact OFT rotation (CANS), DoRA-OFT and OFT
     spectral norm clipping (all off by default), and stochastic rounding for bfloat16 EMA weights (on by default).
 -   **Cloud training** installs OneTrainer+ from this repository on the cloud machine (upstream's default installed
@@ -46,8 +46,8 @@ As of November 2026:
     has been checked.
 -   **Based on** OneTrainer's master branch, with upstream's preview-2 branch ported up to #1756 and the features
     listed under [Credits](#credits).
--   **Pinned stack**: Python 3.11 to 3.13, PyTorch 2.13.0 (ROCm 7.2, CUDA 12.6 or 13.0), bitsandbytes 0.49.2,
-    transformers 5.5.4, diffusers at a pinned commit, `adv_optm` 2.6.1, PySide6 6.11.2, Pillow 13.0.0.
+-   **Pinned stack**: Python 3.11.1 to 3.13, PyTorch 2.13.0 (ROCm 7.2, CUDA 12.6 or 13.0), bitsandbytes 0.49.2,
+    transformers 5.5.4, diffusers at a pinned commit, `adv_optm` 2.6.3, PySide6 6.11.2, Pillow 13.0.0.
 -   **Tested on** an AMD Radeon RX 7900 XTX (gfx1100, ROCm 7.2) and on the CPU with `rocm_check`, which trains a
     small model through the real training script. NVIDIA GPUs aren't tested by this fork; upstream's CUDA support is
     unchanged.
@@ -84,7 +84,7 @@ As of November 2026:
 ## Installation
 
 > [!IMPORTANT]
-> Installing OneTrainer+ requires Python >=3.11 and <3.14.
+> Installing OneTrainer+ requires Python >=3.11.1 and <3.14.
 > You can download Python at https://www.python.org/downloads/windows/.
 > Then follow the below steps.
 
