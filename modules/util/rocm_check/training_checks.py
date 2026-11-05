@@ -136,7 +136,8 @@ class _OptimizerRun:
 
     SHAPES = [(16, 512), (512, 16), (512, 1), (512,)]
 
-    def __init__(self, ctx: Ctx, optimizer, precision, device, dtype, params=None, state_dict=None, overrides=None):
+    def __init__(self, ctx: Ctx, optimizer, precision, device, dtype, params=None, state_dict=None, overrides=None,
+                 lora_tags=False, muon_split=False):
         from modules.util import create
         from modules.util.config.TrainConfig import TrainConfig
         from modules.util.NamedParameterGroup import NamedParameterGroup, NamedParameterGroupCollection
@@ -156,9 +157,16 @@ class _OptimizerRun:
         if params is None:
             params = [_rand(ctx, *s, scale=0.1, seed=20 + i) for i, s in enumerate(self.SHAPES)]
         self.params = [nn.Parameter(p.detach().clone().to(device, dtype)) for p in params]
+        if lora_tags:
+            # as tag_util tags a LoRA's down (rank x in) and up (out x rank) weights
+            for p in self.params:
+                if p.ndim == 2:
+                    setattr(p, "_is_lora_A" if p.shape[0] < p.shape[1] else "_is_lora_B", True)
         self.collection = NamedParameterGroupCollection()
         self.collection.add_group(NamedParameterGroup("lora", self.params, None, "lora"))
-        self.opt = create.create_optimizer(self.collection, state_dict, config)
+        # as the model setups map them for Muon: matrices to Muon, vectors to the auxiliary Adam
+        layer_key_fn = {id(p): "muon" if p.ndim >= 2 else "adam" for p in self.params} if muon_split else None
+        self.opt = create.create_optimizer(self.collection, state_dict, config, layer_key_fn=layer_key_fn)
         optimizer_to_device_(self.opt, device)
         if hasattr(self.opt, "train"):
             self.opt.train()  # schedule-free optimizers
@@ -376,6 +384,61 @@ def adopt_adv_nesterov(ctx: Ctx, rec: Rec):
         err = ((large - small).abs().max() / small.abs().max()).item()
         rec.expect(err < 1e-3, f"{label}: step at gradient scale 1e2 vs 1e-2: {err:.1e} of the distance moved "
                                f"(limit 1e-3)")
+
+
+@check(SECTION, "Compiled Optimizer: every ADV optimizer compiles once per parameter shape, also run after run",
+       full_only=True, timeout=2400.0)
+def compiled_adv_optimizers(ctx: Ctx, rec: Rec):
+    # adv_optm compiles its step per parameter shape, and torch stops a fullgraph compile past recompile_limit (8).
+    # Before create._prepare_compiled_adv_optimizer: PRODIGY_ADV (and AdamW_adv) recompiled once per parameter in the
+    # first step (len(self.state) guard), AdamW_adv and the Muon/AdaMuon auxiliary Adam at every step (bias correction
+    # as a Python float), and every new optimizer compiled every shape again (the third UI run failed). 14 LoRA-tagged
+    # parameters in three shapes, three optimizers in a row (the third resumed from the first one's state), each
+    # compared with the same steps uncompiled
+    from modules.util.enum.Optimizer import Optimizer
+
+    from torch._dynamo.utils import counters
+
+    params = ([_rand(ctx, 16, 512, scale=0.1, seed=40 + i) for i in range(6)]
+              + [_rand(ctx, 512, 16, scale=0.1, seed=50 + i) for i in range(6)]
+              + [_rand(ctx, 512, scale=0.1, seed=60 + i) for i in range(2)])
+    optimizers = [(Optimizer.ADOPT_ADV, {}), (Optimizer.ADOPT_ADV, {"kourkoutas_beta": True}),
+                  (Optimizer.PRODIGY_ADV, {}), (Optimizer.ADAMW_ADV, {}), (Optimizer.LION_ADV, {}),
+                  (Optimizer.SIGNSGD_ADV, {}), (Optimizer.SINKSGD_ADV, {}),
+                  (Optimizer.MUON_ADV, {"MuonWithAuxAdam": True}), (Optimizer.ADAMUON_ADV, {"MuonWithAuxAdam": True})]
+    for optimizer, overrides in optimizers:
+        label = optimizer.name + "".join(f", {k}" for k in overrides)
+        try:
+            compiles = []
+            weights = {}
+            saved = None
+            for run_index, compiled in ((0, True), (1, True), (2, True), (0, False), (2, False)):
+                start = counters["stats"]["unique_graphs"]
+                state = saved if run_index == 2 else None
+                run = _OptimizerRun(ctx, optimizer, None, ctx.device, torch.float32, params=params, state_dict=state,
+                                    overrides=dict(overrides, compile=compiled), lora_tags=True,
+                                    muon_split="MuonWithAuxAdam" in overrides)
+                for group in run.opt.param_groups:
+                    # a resumed group keeps the backup's settings, compiled_optimizer included
+                    if "compiled_optimizer" in group:
+                        group["compiled_optimizer"] = compiled
+                for i in range(4):
+                    run.step(10 * run_index + i)
+                if run_index == 0 and compiled:
+                    saved = run.saved_state()
+                if compiled:
+                    compiles.append(counters["stats"]["unique_graphs"] - start)
+                weights[(run_index, compiled)] = run.weights()
+            errs = [max(((a - b).norm() / b.norm().clamp_min(1e-12)).item()
+                        for a, b in zip(weights[(i, True)], weights[(i, False)], strict=True)) for i in (0, 2)]
+            # one compile per shape (Muon: its matrices compile in its own step, the vectors in the auxiliary Adam's)
+            rec.expect(max(compiles) <= len({tuple(p.shape) for p in params}) and all(torch.isfinite(w).all() for w in weights[(2, True)]) and max(errs) < 1e-3,
+                       f"{label}: compiles per run {compiles}, compiled vs not (fresh, resumed) "
+                       f"{errs[0]:.1e}, {errs[1]:.1e}"
+                       + (" (adv_optm's Lion_adv never compiles: it doesn't keep compiled_optimizer in its groups)"
+                          if optimizer == Optimizer.LION_ADV and max(compiles) == 0 else ""))
+        except Exception as e:
+            rec.fail(f"{label}: {type(e).__name__}: {str(e).splitlines()[0][:200]}")
 
 
 @check(SECTION, "timestep sampling stays inside the noise schedule (every distribution, wide settings, shifts)")

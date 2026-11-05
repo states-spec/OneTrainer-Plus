@@ -130,3 +130,14 @@ the main package versions, and the report lists those that differ). Its first ru
 - **Speed.** The step time median, and the time part moves take (sampling, backups and caching load and unload parts).
 
 Compare runs of the same commit and the same config: the report lists everything that differs.
+
+## Terminal messages that look like errors
+
+- `HIPCachingAllocator.cpp: memory allocation failed with OOM on device 0 while trying to allocate N bytes (free: ...)`
+  (`CUDACachingAllocator.cpp` on NVIDIA), while the run goes on: PyTorch 2.13 prints this at every failed attempt to
+  reserve GPU memory, also the first one. After it, the allocator frees the memory it keeps cached but unused and
+  tries again; MIOpen convolutions fall back to an algorithm with a smaller workspace. Only when that fails too does
+  the run stop with an out-of-memory error. The message says that one large block (often a convolution workspace in
+  the VAE, or a layer-offloading buffer) didn't fit next to the cache; `OT_LOG_VRAM=true` shows the memory around it.
+  Freeing the cache costs a device sync, so a run that prints it often is a little slower, and in the diagnostics log
+  it shows up as allocator retries.

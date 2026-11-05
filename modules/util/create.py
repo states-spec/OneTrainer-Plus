@@ -1,6 +1,7 @@
 import ast
 import functools
 import importlib
+import inspect
 from collections.abc import Iterable
 
 import modules.util.multi_gpu_util as multi
@@ -367,6 +368,83 @@ def _check_resumed_adv_nesterov(optimizer: torch.optim.Optimizer, optimizer_type
     if any(group.get('nesterov') for group in optimizer.param_groups) and not _adv_nesterov_works(optimizer_type):
         raise ValueError(_nesterov_broken_message(optimizer_type) + ". The backup was made with Nesterov on, and a "
                          "resumed backup keeps its optimizer settings.")
+
+
+# adv_optm's Compiled Optimizer compiles its per-parameter step (torch.compile, fullgraph) once per parameter shape, and
+# torch counts every variant of one function against torch._dynamo.config.recompile_limit (8; 256 in all), past which
+# fullgraph raises FailOnRecompileLimitHit. Three things in adv_optm (2.6.3) made it recompile far more often than once
+# per shape:
+# - The step reads self.state[p] (param_update.apply_parameter_update), so its guards check len(self.state), and that
+#   grows by one with each parameter's lazily created state during the first step: one compile per parameter (the
+#   user's PRODIGY_ADV Chroma LoRA stopped at 256). Creating every parameter's (empty) state entry first keeps the
+#   length constant; adv_optm fills it in at the parameter's first step as before.
+# - Its guards check the optimizer object's identity (self.beta1 and the like), so every new optimizer compiles every
+#   shape again, and in the UI those compiles add up run after run against the same limit (the third run with three
+#   shapes failed). The cache of these functions is cleared when an optimizer is created.
+# - AdamW_adv and Muon/AdaMuon's auxiliary Adam pass the bias correction as a Python float that changes every step, so
+#   they recompiled at every step. It is passed as a 0-dim tensor instead, as adv_optm already passes the step size.
+# The limit is raised to the number of different (group, shape, dtype, adapter tag) combinations the run steps.
+_ADV_COMPILED_FUNCTIONS = ("_step_parameter", "_muon_step_parameter")
+_ADV_TENSOR_ARGS = ("sqrt_bias_correction2",)
+
+
+def _call_with_tensor_args(fn, indexes: tuple[int, ...]):
+    def call(*args, **kwargs):
+        if any(i < len(args) and isinstance(args[i], (int, float)) for i in indexes):
+            args = tuple(torch.as_tensor(float(a)) if i in indexes and isinstance(a, (int, float)) else a
+                         for i, a in enumerate(args))
+        return fn(*args, **kwargs)
+    return call
+
+
+class _CompiledFnsWithTensorArgs(dict):
+    # adv_optm stores each compiled step here (cache key -> compiled function) and calls what it reads back
+    def __init__(self, indexes: tuple[int, ...]):
+        super().__init__()
+        self.indexes = indexes
+
+    def __setitem__(self, key, fn):
+        super().__setitem__(key, _call_with_tensor_args(fn, self.indexes))
+
+
+def _tensor_arg_indexes(fn, skip_self: bool) -> tuple[int, ...]:
+    names = list(inspect.signature(fn).parameters)
+    if skip_self:
+        names = names[1:]
+    return tuple(names.index(name) for name in _ADV_TENSOR_ARGS if name in names)
+
+
+def _prepare_compiled_adv_optimizer(optimizer: torch.optim.Optimizer):
+    import torch._dynamo.config as dynamo_config
+    from torch._dynamo.eval_frame import reset_code
+
+    from adv_optm.util import Muon_AuxAdam
+
+    cls = type(optimizer)
+    functions = [getattr(cls, name) for name in _ADV_COMPILED_FUNCTIONS if hasattr(cls, name)]
+    if hasattr(optimizer, "_compiled_adam_step_fns"):
+        functions.append(Muon_AuxAdam._adam_step_parameter)
+    for fn in functions:
+        reset_code(fn.__code__)
+
+    for attr, fn, skip_self in (("_compiled_step_fns", getattr(cls, "_step_parameter", None), True),
+                                ("_compiled_adam_step_fns", Muon_AuxAdam._adam_step_parameter, False)):
+        compiled = getattr(optimizer, attr, None)
+        if fn is None or not isinstance(compiled, dict) or compiled:
+            continue
+        indexes = _tensor_arg_indexes(fn, skip_self)
+        if indexes:
+            setattr(optimizer, attr, _CompiledFnsWithTensorArgs(indexes))
+
+    variants = set()
+    for index, group in enumerate(optimizer.param_groups):
+        for p in group['params']:
+            optimizer.state[p]
+            tags = tuple(name for name in ("_is_lora_A", "_is_lora_B", "_is_dora_scale", "_is_oft") if getattr(p, name, False))
+            variants.add((index, tuple(p.shape), p.dtype, tags))
+    needed = len(variants) + 8
+    dynamo_config.recompile_limit = max(dynamo_config.recompile_limit, needed)
+    dynamo_config.accumulated_recompile_limit = max(dynamo_config.accumulated_recompile_limit, needed)
 
 
 def _effective_snr_cond(optimizer_config: TrainOptimizerConfig) -> bool:
@@ -1490,6 +1568,9 @@ def create_optimizer(
                       f"here: the training continues at learning rate x Initial D. For D to adapt again, start without "
                       f"this backup (Continue From Last Backup off, or a new workspace), or set Initial D to the step "
                       f"size you want.")
+
+    if optimizer_config.optimizer.is_adv_optm and optimizer_config.compile:
+        _prepare_compiled_adv_optimizer(optimizer)
 
     return optimizer
 

@@ -271,6 +271,10 @@ def _feature_variants() -> list[tuple[str, dict, list[str], dict]]:
         # adv_optm's Nesterov step was broken for Prodigy before 2.6.1
         ("PRODIGY_ADV with Nesterov", {"optimizer": {"optimizer": "PRODIGY_ADV", "nesterov": True},
                                        "learning_rate": 1.0}, [], {}),
+        # adv_optm's compiled step recompiled per parameter (PRODIGY_ADV) or per step (AdamW_adv) until torch stopped it;
+        # create._prepare_compiled_adv_optimizer
+        ("PRODIGY_ADV with Compiled Optimizer", {"optimizer": {"optimizer": "PRODIGY_ADV", "compile": True},
+                                                 "learning_rate": 1.0}, [], {}),
         ("MUON_ADV", {"optimizer": {"optimizer": "MUON_ADV"}, "learning_rate": 1e-3}, [], {}),
         ("ADAMUON_ADV with the auxiliary Adam, DoRA",
          {"optimizer": {"optimizer": "ADAMUON_ADV", "MuonWithAuxAdam": True}, "lora_decompose": True,
