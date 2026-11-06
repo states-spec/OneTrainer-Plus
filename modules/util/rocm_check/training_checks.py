@@ -487,9 +487,9 @@ def compiled_adv_optimizers(ctx: Ctx, rec: Rec):
             # one compile per shape (Muon: its matrices compile in its own step, the vectors in the auxiliary Adam's)
             rec.expect(max(compiles) <= len({tuple(p.shape) for p in params}) and all(torch.isfinite(w).all() for w in weights[(2, True)]) and max(errs) < 1e-3,
                        f"{label}: compiles per run {compiles}, compiled vs not (fresh, resumed) "
-                       f"{errs[0]:.1e}, {errs[1]:.1e}"
-                       + (" (adv_optm's Lion_adv never compiles: it doesn't keep compiled_optimizer in its groups)"
-                          if optimizer == Optimizer.LION_ADV and max(compiles) == 0 else ""))
+                       f"{errs[0]:.1e}, {errs[1]:.1e}")
+            # adv_optm 2.6.3's Lion_adv left compiled_optimizer out of its groups and never compiled (create.py sets it)
+            rec.expect(min(compiles) > 0, f"{label}: the step compiles at all ({min(compiles)} compiles in a run)")
         except Exception as e:
             rec.fail(f"{label}: {type(e).__name__}: {str(e).splitlines()[0][:200]}")
 

@@ -1205,6 +1205,11 @@ def create_optimizer(
                 **_adv_scaled_wd_kwargs(optimizer_config),
                 compiled_optimizer=optimizer_config.compile if optimizer_config.compile is not None else False,
             )
+            # adv_optm (2.6.3) takes compiled_optimizer but leaves it out of Lion_adv's defaults, and its step reads
+            # it from the group, so Compiled Optimizer never compiled LION_ADV. setdefault: an adv_optm that keeps it
+            # keeps its own value; a resumed backup's groups get it from these (create_optimizer adds missing settings)
+            for group in optimizer.param_groups:
+                group.setdefault('compiled_optimizer', bool(optimizer_config.compile))
 
         # MUON_ADV Optimizer
         case Optimizer.MUON_ADV:

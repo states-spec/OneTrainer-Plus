@@ -276,6 +276,9 @@ def _feature_variants() -> list[tuple[str, dict, list[str], dict]]:
         # create._prepare_compiled_adv_optimizer
         ("PRODIGY_ADV with Compiled Optimizer", {"optimizer": {"optimizer": "PRODIGY_ADV", "compile": True},
                                                  "learning_rate": 1.0}, [], {}),
+        # adv_optm 2.6.3's Lion_adv never compiled (compiled_optimizer left out of its groups; create.py sets it)
+        ("LION_ADV with Compiled Optimizer", {"optimizer": {"optimizer": "LION_ADV", "compile": True},
+                                              "learning_rate": 1e-4}, [], {}),
         ("MUON_ADV", {"optimizer": {"optimizer": "MUON_ADV"}, "learning_rate": 1e-3}, [], {}),
         ("ADAMUON_ADV with the auxiliary Adam, DoRA",
          {"optimizer": {"optimizer": "ADAMUON_ADV", "MuonWithAuxAdam": True}, "lora_decompose": True,
