@@ -57,7 +57,7 @@ def main():
     # saved for, and reusing it made every run of that config write over the same final model.
     train_config.run_name = prepare_run_name(
         train_config.training_method, train_config.run_name_mode, train_config.run_name, is_new_invocation=True)
-    # Random: a new seed for this run (printed when training starts, and saved in the workspace with the run's config).
+    # Random: a new seed for this run (saved in the workspace with the run's config).
     # Increment / Decrement can't advance a value in the config file: the CLI trains with the value it finds there
     train_config.training_seed = seed_for_new_run(train_config.training_seed_mode, train_config.training_seed)
 
