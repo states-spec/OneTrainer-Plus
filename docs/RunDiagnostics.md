@@ -85,7 +85,8 @@ The first log is the reference. The report shows:
 Without `--variant` this is the MemPool comparison: `baseline` against `OT_ROCM_MEM_POOLS=true`, twice each, in the
 order baseline, MemPools, baseline, MemPools (alternating spreads drift, such as GPU temperature, over both). Each run
 gets its own workspace, cache and output folder under `diagnostics/diag_ab/<timestamp>/`, so every run loads, caches and trains
-the same way, and `OT_SEED=42` (unless you set another), so every run starts from the same LoRA. At the end it prints
+the same way, and `OT_SEED=42` (unless you set another), which replaces the training seed of every run, so every run starts
+from the same LoRA and steps with the same noise. At the end it prints
 the report and writes it to `report.txt` in that folder.
 
 Other comparisons: `--variant 'NAME env:KEY=VALUE config:key=value ...'`, as often as needed:

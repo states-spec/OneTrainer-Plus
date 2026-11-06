@@ -87,19 +87,9 @@ def _weights_digest(path: str) -> tuple[str, int]:
 
 
 def apply_reproducibility_env():
-    """OT_SEED=<int> seeds Python's, NumPy's and torch's global generators when training starts, so two runs of the same
-    config start from the same LoRA/embedding initialization (drawn unseeded otherwise; the noise and the data order
-    are seeded per step and per concept already). OT_DETERMINISTIC=true asks torch for deterministic kernels
-    (use_deterministic_algorithms, warn_only: an op without one warns and runs as before), so GPU runs differ less."""
-    seed = os.environ.get("OT_SEED", "").strip()
-    if seed:
-        import random
-
-        import numpy as np
-        random.seed(int(seed))
-        np.random.seed(int(seed))  # noqa: NPY002 (the legacy global generator is the one other code draws from)
-        torch.manual_seed(int(seed))
-        print(f"OT_SEED: seeded the global random generators with {int(seed)}")
+    """OT_DETERMINISTIC=true asks torch for deterministic kernels (use_deterministic_algorithms, warn_only: an op without
+    one warns and runs as before), so GPU runs differ less. OT_SEED=<int> replaces the run's training seed
+    (training_seed.apply_training_seed)."""
     if os.environ.get("OT_DETERMINISTIC", "").lower() in _TRUE:
         torch.use_deterministic_algorithms(True, warn_only=True)
         print("OT_DETERMINISTIC: deterministic algorithms requested (ops without one warn)")

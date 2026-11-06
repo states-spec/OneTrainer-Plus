@@ -435,12 +435,13 @@ def training_features(ctx: Ctx, rec: Rec):
             shutil.rmtree(base_dir, ignore_errors=True)
 
 
-@check(SECTION, "training seed: the same seed trains alike, another seed differently, Off as before, Random "
-                "repeatable", full_only=True, timeout=3600.0,
+@check(SECTION, "training seed: the same seed trains alike, another seed differently, one seed per run (Random "
+                "repeatable, OT_SEED replaces it)", full_only=True, timeout=3600.0,
        note="trains a tiny random Chroma from scratch six times: a few minutes")
 def training_seed(ctx: Ctx, rec: Rec):
-    # The training tab's Training Seed (modules/util/training_seed.py) seeds the LoRA initialization and adds
-    # seed * 2^32 to each step's noise seed. These runs start from a fresh LoRA (no initial LoRA file), without OT_SEED
+    # The training tab's Training Seed (modules/util/training_seed.py): every random source of a run comes from it (the
+    # global generators at the start, seed * 2^32 + step for the per-step generators). These runs start from a fresh
+    # LoRA (no initial LoRA file), without OT_SEED unless a run sets it
     from modules.util.rocm_check.tiny_chroma import build_dataset, build_tiny_chroma
 
     base_dir = tempfile.mkdtemp(prefix="rocm_check_seed_", dir=ctx.out_dir if os.path.isdir(ctx.out_dir) else None)
@@ -467,8 +468,8 @@ def training_seed(ctx: Ctx, rec: Rec):
         fixed_a = run("fixed_7", "FIXED", 7)
         fixed_b = run("fixed_7_again", "FIXED", 7)
         other = run("fixed_8", "FIXED", 8)
-        zero = run("fixed_0", "FIXED", 0)
-        off = run("off_ot_seed_0", "OFF", 0, {"OT_SEED": "0"})
+        # OT_SEED replaces the config's seed for the whole run: the same run as that seed, not a mix of the two
+        env_seed = run("ot_seed_7_over_3", "FIXED", 3, {"OT_SEED": "7"})
         randomized = run("random", "RANDOM", 0)
         match = re.search(r"Training seed: (\d+) \(Random\)", randomized["log"])
         repeat = run("random_repeated", "FIXED", int(match.group(1))) if match else None
@@ -495,8 +496,7 @@ def training_seed(ctx: Ctx, rec: Rec):
 
         compare("Fixed 7 vs Fixed 7 again", fixed_a, fixed_b, True)
         compare("Fixed 7 vs Fixed 8", fixed_a, other, False)
-        # seed 0 adds 0 to each step's noise seed, so Fixed 0 is Off with the global generators seeded the same way
-        compare("Fixed 0 vs Off with OT_SEED=0 (Off keeps the noise as before)", zero, off, True)
+        compare("OT_SEED=7 over a config with seed 3 vs Fixed 7", env_seed, fixed_a, True)
         if match:
             compare(f"Random (seed {match.group(1)}) vs Fixed {match.group(1)}", randomized, repeat, True)
     finally:

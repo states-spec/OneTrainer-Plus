@@ -379,15 +379,11 @@ class BaseTrainingTabView(ABC):
         self.components.label(frame, 11, 0, "Training Seed",
                               tooltip=dropdown_hints.TRAINING_SEED_MODE, wide_tooltip=True)
         self.components.options(frame, 11, 1, [str(x) for x in list(TrainingSeedMode)], ui_state, "training_seed_mode")
-        seed_widgets = [
-            self.components.label(frame, 12, 0, "Seed",
-                                  tooltip=f"The training seed, 0 to {MAX_TRAINING_SEED}. Printed when training starts and saved with the run's config in the workspace (workspace/config). Increment / Decrement change it after each run, Random before each run."),
-            self.components.entry(frame, 12, 1, ui_state, "training_seed",
-                                  extra_validate=check_range(lower=0, upper=MAX_TRAINING_SEED,
-                                                             message=f"The seed must be between 0 and {MAX_TRAINING_SEED}")),
-        ]
-        self._enable_while(ui_state, "training_seed_mode", lambda value: str(value) != str(TrainingSeedMode.OFF),
-                           seed_widgets)
+        self.components.label(frame, 12, 0, "Seed",
+                              tooltip=f"The training seed, 0 to {MAX_TRAINING_SEED}: everything random in the run comes from it. Printed when training starts and saved with the run's config in the workspace (workspace/config). Increment / Decrement change it after each run, Random before each run.")
+        self.components.entry(frame, 12, 1, ui_state, "training_seed",
+                              extra_validate=check_range(lower=0, upper=MAX_TRAINING_SEED,
+                                                         message=f"The seed must be between 0 and {MAX_TRAINING_SEED}"))
 
     def __create_base2_frame(self, master, row, controller, ui_state, video_training_enabled: bool = False,
                               supports_circular_padding: bool = False):

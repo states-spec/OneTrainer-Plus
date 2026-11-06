@@ -21,8 +21,8 @@ whose work it is built on are listed under [Credits](#credits).
 -   **Optimizers**: Advanced_Optimizers (`adv_optm`) 2.6.3 with its 2.5 and 2.6 options (Scaled Weight Decay among
     them), the parameter tags its optimizers need, and resumes that keep Prodigy's step size. The fix for Nesterov
     momentum in PRODIGY_ADV was found here and merged into `adv_optm` 2.6.1; 2.6.2 fixed it in ADOPT_ADV too.
--   **Training seed**: a seed for each training run, Fixed, Increment, Decrement or Random (Off by default), so
-    runs that differ in one setting start and step alike ([docs/QuickStartGuide.md](docs/QuickStartGuide.md#training-seed)).
+-   **Training seed**: one seed for everything random in a training run, Fixed (the default), Increment, Decrement
+    or Random, so runs that differ in one setting start and step alike ([docs/QuickStartGuide.md](docs/QuickStartGuide.md#training-seed)).
 -   **Training options**: CIOP, CEP and Immiscible Diffusion noise, an exact OFT rotation (CANS), DoRA-OFT and OFT
     spectral norm clipping (all off by default), and stochastic rounding for bfloat16 EMA weights (on by default).
 -   **Cloud training** installs OneTrainer+ from this repository on the cloud machine (upstream's default installed

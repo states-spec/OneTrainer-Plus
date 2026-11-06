@@ -95,17 +95,16 @@ settings, but here are some examples of the most important ones:
 
 ### Training Seed
 
-The training seed decides where a run starts (the LoRA or embedding initialization), its dropout, and the noise and
-timesteps of every step. With the same seed and settings, two runs train alike (exactly so on the CPU), so a change in
+Everything random in a training run comes from one number, the training seed: where the run starts (the LoRA or
+embedding initialization), its dropout, the noise and timesteps of every step, and stochastic rounding. With the same
+seed and settings, two runs train alike (bit-identical in our tests on the CPU and on an RX 7900 XTX), so a change in
 one setting shows its own effect instead of being mixed with a different random start. Set it in the training tab:
 
-- Off (the default): as before. Every run starts from a new random initialization, and every run gets the same noise
-  sequence.
-- Fixed: the seed in the Seed field, for every run. Use it to compare settings on the same seed.
+- Fixed (the default, seed 42): the seed in the Seed field, for every run. Use it to compare settings on the same seed.
 - Increment / Decrement: trains with the seed shown, then moves it one up or down for the next run, to try a few seeds
   in a row.
-- Random: a new seed for every run, written into the Seed field before the run starts. To repeat a run you liked,
-  switch to Fixed with that seed.
+- Random: one new seed for every run, drawn once and written into the Seed field before the run starts; the whole run
+  comes from that one seed. To repeat a run you liked, switch to Fixed with that seed.
 
 The seed a run used is printed when it starts ("Training seed: ...") and saved with the run's config in the workspace
 (`workspace/config/<run name>.json`). The data order and augmentations follow each concept's own seed (concepts tab),

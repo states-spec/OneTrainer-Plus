@@ -1301,7 +1301,7 @@ class TrainConfig(BaseConfig):
         data.append(("learning_rate_cycles", 1.0, float, False))
         data.append(("learning_rate_min_factor", 0.0, float, False))
         data.append(("epochs", 100, int, False))
-        data.append(("training_seed_mode", TrainingSeedMode.OFF, TrainingSeedMode, False))
+        data.append(("training_seed_mode", TrainingSeedMode.FIXED, TrainingSeedMode, False))
         data.append(("training_seed", 42, int, False))
         data.append(("batch_size", 1, int, False))
         data.append(("gradient_accumulation_steps", 1, int, False))

@@ -40,7 +40,7 @@ from modules.util.run_diagnostics import apply_reproducibility_env, diagnostics
 from modules.util.time_util import get_string_timestamp
 from modules.util.torch_util import fp8_matmul_supported, torch_gc
 from modules.util.tqdm_util import tqdm
-from modules.util.training_seed import apply_training_seed, check_training_seed
+from modules.util.training_seed import apply_training_seed, check_training_seed, training_seed_offset
 from modules.util.TrainProgress import TrainProgress
 
 import torch
@@ -120,7 +120,7 @@ class GenericTrainer(BaseTrainer):
         check_training_seed(self.config)
         diagnostics.close()  # a run in this process (the UI) that ended in an error left its log open
         diagnostics.start(self.config, torch.device(self.config.train_device))
-        # the training seed first: OT_SEED (diagnostics, rocm_check) seeds the global generators over it
+        # OT_SEED (diagnostics, rocm_check) replaces the training seed for the whole run
         apply_training_seed(self.config)
         apply_reproducibility_env()
 
@@ -889,7 +889,7 @@ class GenericTrainer(BaseTrainer):
                     TorchMemoryRecorder(enabled=multi.is_master() and train_progress.global_step in _MEMORY_PROFILE_STEPS, filename=f"memory-step{train_progress.global_step}-{get_string_timestamp()}.pickle"),
                     TorchProfiler      (enabled=multi.is_master() and train_progress.global_step in _PROFILE_STEPS, filename=f"profile-step{train_progress.global_step}-{get_string_timestamp()}.json"),
                 ):
-                    step_seed = train_progress.global_step
+                    step_seed = train_progress.global_step + training_seed_offset(self.config)
                     bf16_stochastic_rounding_set_seed(step_seed, train_device)
 
                     prior_pred_indices = [i for i in range(self.config.batch_size)

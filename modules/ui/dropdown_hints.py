@@ -21,11 +21,11 @@ RUN_NAME_MODE = (
 )
 
 TRAINING_SEED_MODE = (
-    "Off: as before, a new initialization every run and the same noise for every run. "
     "Fixed: the seed below, every run, so runs that differ only in their settings start and step alike. "
     "Increment / Decrement: trains with the seed below, then moves it one up / down for the next run. "
-    "Random: a new seed for each run, written into the field so the run can be repeated with Fixed. "
-    "The seed sets the LoRA/embedding initialization, dropout and each step's noise and timesteps; the data order "
+    "Random: one new seed for each run, written into the field before it starts, so the run can be repeated with "
+    "Fixed. Everything random in the run comes from that one seed: the LoRA/embedding initialization, dropout, each "
+    "step's noise and timesteps and stochastic rounding; the data order "
     "and augmentations follow each concept's own seed (concepts tab). Validation keeps its own fixed seed."
 )
 
