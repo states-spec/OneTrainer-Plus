@@ -109,8 +109,8 @@ class BaseLoraTabView:
                         "Exact Rotation). Off, its matrix products run in the training data type, which keeps the "
                         "rotation about 5e-3 from orthogonal under bfloat16, close to the 5-term series at small "
                         "rotations; on, it is exact to about 1e-7. The products are block size x block size, so the "
-                        "extra cost is small next to the layer. Changes the results compared with runs made without it; "
-                        "same file format.")
+                        "extra cost is small next to the layer. On by default; turn it off to reproduce runs made before it "
+                        "existed. Same file format.")
             cans_fp32_switch = self.components.switch(master, 5, 4, ui_state, "oft_cans_fp32")
 
             def update_cans_fp32(*_):

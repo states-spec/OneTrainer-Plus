@@ -1488,7 +1488,7 @@ class TrainConfig(BaseConfig):
         data.append(("dora_oft", False, bool, False))
         data.append(("oft_scaled", False, bool, False))
         data.append(("oft_cans", False, bool, False))
-        data.append(("oft_cans_fp32", False, bool, False))
+        data.append(("oft_cans_fp32", True, bool, False))
         data.append(("oft_clipped_norm", None, float, True))
 
         # lokr

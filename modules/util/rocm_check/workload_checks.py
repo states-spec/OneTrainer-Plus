@@ -290,8 +290,9 @@ def _feature_variants() -> list[tuple[str, dict, list[str], dict]]:
         ("DoRA", {"lora_decompose": True}, [], {"round_trip": True}),
         ("LoHa", {"peft_type": "LOHA"}, [], {"round_trip": True}),
         ("LoKr with DoRA", {"peft_type": "LOKR", "lora_decompose": True, "lokr_dim": 4}, [], {"round_trip": True}),
-        ("OFT with DoRA-OFT, CANS and spectral norm clipping",
-         {"peft_type": "OFT_2", "dora_oft": True, "oft_cans": True, "oft_clipped_norm": 0.5, "oft_block_size": 8},
+        ("OFT with DoRA-OFT, CANS in bf16 and spectral norm clipping",
+         {"peft_type": "OFT_2", "dora_oft": True, "oft_cans": True, "oft_cans_fp32": False, "oft_clipped_norm": 0.5,
+          "oft_block_size": 8},
          [], {"round_trip": True}),
         ("OFT with CANS in float32", {"peft_type": "OFT_2", "oft_cans": True, "oft_cans_fp32": True, "oft_block_size": 8},
          [], {"round_trip": True}),
@@ -535,8 +536,9 @@ def _compiled_variants(ctx: Ctx) -> list[tuple[str, dict, list[str]]]:
         ("DoRA", {"lora_decompose": True}, []),
         ("LoKr with DoRA", {"peft_type": "LOKR", "lora_decompose": True, "lokr_dim": 4}, []),
         # CANS didn't compile in 20 minutes before its coefficients became an opaque op (oft_utils.cans_coefficients)
-        ("OFT with DoRA-OFT, CANS and spectral norm clipping",
-         {"peft_type": "OFT_2", "dora_oft": True, "oft_cans": True, "oft_clipped_norm": 0.5, "oft_block_size": 8}, []),
+        ("OFT with DoRA-OFT, CANS in bf16 and spectral norm clipping",
+         {"peft_type": "OFT_2", "dora_oft": True, "oft_cans": True, "oft_cans_fp32": False, "oft_clipped_norm": 0.5,
+          "oft_block_size": 8}, []),
         # its rotation is built with autocast switched off inside the compiled block
         ("OFT with CANS in float32", {"peft_type": "OFT_2", "oft_cans": True, "oft_cans_fp32": True,
                                       "oft_clipped_norm": 0.5, "oft_block_size": 8}, []),
