@@ -1,3 +1,4 @@
+import os
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 
@@ -8,6 +9,15 @@ from modules.util.enum.ImageFormat import ImageFormat
 from modules.util.enum.PathIOType import PathIOType
 from modules.util.enum.TrainingMethod import TrainingMethod
 from modules.util.ui.training_method_notice import build_training_method_notice
+
+
+def _validate_backup_folder(value: str) -> str | None:
+    # a backup writes its meta.json last; a folder without it is an unfinished backup or not a backup at all
+    if value.startswith("cloud:") or not os.path.isdir(value):
+        return None  # the path validator reports a missing folder
+    if not os.path.isfile(os.path.join(value, "meta.json")):
+        return "Not a finished backup folder (no meta.json in it)"
+    return None
 
 
 class BaseTrainUIView(ABC):
@@ -136,10 +146,36 @@ class BaseTrainUIView(ABC):
                          tooltip="The directory where cached data is saved")
         self.components.path_entry(frame, 0, 3, ui_state, "cache_dir", mode="dir", io_type=PathIOType.OUTPUT)
 
+        # continue from a backup chosen by the user, or from the last backup: one at a time, the other is greyed out
+        backup_label = self.components.label(frame, 1, 0, "Continue from Backup",
+                         tooltip="Continues training from this backup folder (in <workspace>/backup, named "
+                                 "<run>-backup-<step>-<epoch>-<epoch step>), however old it is: its weights, optimizer "
+                                 "state and progress. While a backup is selected, \"Continue from last backup\" is "
+                                 "greyed out and not used; clear the field to use it again.",
+                         wide_tooltip=True)
+        backup_entry = self.components.path_entry(frame, 1, 1, ui_state, "continue_backup_path", mode="dir",
+                                   io_type=PathIOType.INPUT,
+                                   extra_validate=_validate_backup_folder,
+                                   initial_dir=lambda: self.__backup_dir(ui_state))
+
         # continue from previous backup
-        self.components.label(frame, 2, 0, "Continue from last backup",
-                         tooltip="Automatically continues training from the last backup saved in <workspace>/backup")
-        self.components.switch(frame, 2, 1, ui_state, "continue_last_backup")
+        last_backup_label = self.components.label(frame, 2, 0, "Continue from last backup",
+                         tooltip="Automatically continues training from the last backup saved in <workspace>/backup. "
+                                 "While it is on, \"Continue from Backup\" is greyed out and not used.")
+        last_backup_switch = self.components.switch(frame, 2, 1, ui_state, "continue_last_backup")
+
+        def update_backup_choice(*args):
+            # a config with both set (written by hand) resumes the selected backup, so the switch is the one greyed out
+            selected = bool(str(ui_state.get_var("continue_backup_path").get()).strip())
+            last = str(ui_state.get_var("continue_last_backup").get()).lower() in ("true", "1")
+            for widget in (backup_label, backup_entry):
+                self.components.set_widget_enabled(widget, selected or not last)
+            for widget in (last_backup_label, last_backup_switch):
+                self.components.set_widget_enabled(widget, not selected)
+
+        self.components.bind_var_trace(backup_entry, ui_state, "continue_backup_path", update_backup_choice)
+        self.components.bind_var_trace(last_backup_switch, ui_state, "continue_last_backup", update_backup_choice)
+        update_backup_choice()
 
         # only cache
         self.components.label(frame, 2, 2, "Only Cache",
@@ -235,6 +271,13 @@ class BaseTrainUIView(ABC):
         self.components.label(frame, 15, 0, "Temp Device",
                          tooltip="The device used to temporarily offload models while they are not used. Default:\"cpu\"")
         self.components.entry(frame, 15, 1, ui_state, "temp_device")
+
+    @staticmethod
+    def __backup_dir(ui_state) -> str:
+        # the folder picker starts in the workspace's backups
+        workspace = ui_state.get_var("workspace_dir").get()
+        backup_dir = os.path.join(workspace, "backup")
+        return backup_dir if os.path.isdir(backup_dir) else workspace
 
     def build_data_tab_content(self, frame, controller, ui_state):
         # aspect ratio bucketing

@@ -310,8 +310,12 @@ def run_probe(config: TrainConfig, steps: int, check_every: int, out_dir: str):
         log(f"backups in the workspace before the run: {len(backups)}"
             + "".join(f"\n    {path}{'' if os.path.isfile(os.path.join(path, 'meta.json')) else ' (incomplete)'}"
                       for path in backups))
-        log(f"continue from last backup: {config.continue_last_backup}"
-            + (f" -> resumes {config.get_last_backup_path()}" if config.continue_last_backup and backups else ""))
+        selected = getattr(config, "continue_backup_path", "")
+        if selected:
+            log(f"continue from backup: {os.path.abspath(selected)} (selected; Continue From Last Backup doesn't apply)")
+        else:
+            log(f"continue from last backup: {config.continue_last_backup}"
+                + (f" -> resumes {config.get_last_backup_path()}" if config.continue_last_backup and backups else ""))
         lora = config.lora_model_name
         if lora:
             is_backup = os.path.isfile(os.path.join(lora, "meta.json"))

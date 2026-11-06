@@ -128,6 +128,8 @@ class GenericTrainer(BaseTrainer):
         self.__check_device_support()
         create.check_optimizer_config(self.config.optimizer)
         check_training_seed(self.config)
+        # a selected backup that can't be resumed stops here, not after caching
+        self.config.check_selected_backup()
         diagnostics.close()  # a run in this process (the UI) that ended in an error left its log open
         diagnostics.start(self.config, torch.device(self.config.train_device))
         # OT_SEED (diagnostics, rocm_check) replaces the training seed for the whole run
@@ -164,9 +166,9 @@ class GenericTrainer(BaseTrainer):
 
         model_names = self.config.model_names()
 
-        if self.config.continue_last_backup:
+        if self.config.continue_backup_path or self.config.continue_last_backup:
             self.callbacks.on_update_status("searching for previous backups")
-            last_backup_path = self.config.get_last_backup_path()
+            last_backup_path = self.config.get_resume_backup_path()
 
             if last_backup_path:
                 if self.config.training_method == TrainingMethod.LORA:
@@ -179,7 +181,8 @@ class GenericTrainer(BaseTrainer):
                     model_names.transformer_model = ""
 
                 description = self.config.describe_backup(last_backup_path)
-                print(f"Continuing training from backup '{last_backup_path}'"
+                selected = "the selected " if self.config.continue_backup_path else ""
+                print(f"Continuing training from {selected}backup '{last_backup_path}'"
                       f"{f' ({description})' if description else ''}...")
             else:
                 print("No backup found, continuing without backup...")
