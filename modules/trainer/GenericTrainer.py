@@ -40,7 +40,12 @@ from modules.util.run_diagnostics import apply_reproducibility_env, diagnostics
 from modules.util.time_util import get_string_timestamp
 from modules.util.torch_util import fp8_matmul_supported, torch_gc
 from modules.util.tqdm_util import tqdm
-from modules.util.training_seed import apply_training_seed, check_training_seed, training_seed_offset
+from modules.util.training_seed import (
+    apply_training_seed,
+    check_training_seed,
+    seed_adv_optm_generators,
+    training_seed_offset,
+)
 from modules.util.TrainProgress import TrainProgress
 
 import torch
@@ -891,6 +896,7 @@ class GenericTrainer(BaseTrainer):
                 ):
                     step_seed = train_progress.global_step + training_seed_offset(self.config)
                     bf16_stochastic_rounding_set_seed(step_seed, train_device)
+                    seed_adv_optm_generators(step_seed, train_device)
 
                     prior_pred_indices = [i for i in range(self.config.batch_size)
                                           if ConceptType(batch['concept_type'][i]) == ConceptType.PRIOR_PREDICTION]

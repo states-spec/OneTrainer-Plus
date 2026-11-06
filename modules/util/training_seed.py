@@ -4,9 +4,15 @@ this one number:
 - the global generators (Python, NumPy, torch on every device), seeded with it when training starts: the LoRA and
   embedding initialization, dropout, OFT's power-iteration start, adv_optm's stochastic rounding;
 - each step's generator (noise, timesteps, offset noise, CIOP/CEP, Immiscible noise) in every model setup's predict,
-  seeded with seed * 2^32 + the step (and the GPU's rank);
+  seeded with the step (and the GPU's rank) + a 32-bit hash of the seed. torch's CPU generator keeps only the low 32
+  bits of a seed, so the seed's part has to be in them: an earlier seed * 2^32 left every CPU per-step generator the
+  same whatever the seed. A step's seed is distinct within a run (the step + a constant, modulo 2^32);
 - the bf16 stochastic rounding of OneTrainer's own optimizer extensions, the EMA and multi-GPU gradient reduction,
-  seeded the same way at each step.
+  seeded the same way at each step;
+- adv_optm's own generators (stochastic rounding of bf16 weights and bf16_sr/int8_sr states, SignSGD's stochastic
+  sign, Muon's low-rank orthogonalization, spectral normalization's start), which adv_optm seeds with 42 once per
+  process: reseeded the same way at each step, so they follow the seed, a second run in the same UI session starts
+  where the first did, and a resumed run continues where the backup left off.
 Two runs with the same seed and settings start and step alike (bit-identical on the CPU and on the 7900 XTX).
 Validation keeps its own fixed seed, so it compares runs on the same noise. The data order and the augmentations
 follow each concept's own seed (fixed values in the concept file): they come before the latent cache. OT_SEED (run
@@ -74,5 +80,31 @@ def apply_training_seed(config):
 
 
 def training_seed_offset(config) -> int:
-    """added to each step's seed: every model setup's predict, and the bf16 stochastic rounding generator"""
-    return config.training_seed << 32
+    """added to each step's seed: every model setup's predict, the bf16 stochastic rounding generator and adv_optm's.
+    A 32-bit hash of the seed (SplitMix64's finalizer), so it lands in the bits every generator reads"""
+    x = (config.training_seed + 0x9E3779B97F4A7C15) & 0xFFFFFFFFFFFFFFFF
+    x = ((x ^ (x >> 30)) * 0xBF58476D1CE4E5B9) & 0xFFFFFFFFFFFFFFFF
+    x = ((x ^ (x >> 27)) * 0x94D049BB133111EB) & 0xFFFFFFFFFFFFFFFF
+    return (x ^ (x >> 31)) & 0xFFFFFFFF
+
+
+def _exact_device(device: torch.device) -> torch.device:
+    # adv_optm keys its generators by a tensor's device, which always has an index ("cuda:0", not "cuda")
+    if device.type != "cpu" and device.index is None:
+        return torch.device(device.type, torch.cuda.current_device() if device.type == "cuda" else 0)
+    return device
+
+
+def seed_adv_optm_generators(step_seed: int, train_device: torch.device):
+    """reseeds adv_optm's per-device generators (GenericTrainer.train, every step, with the step's seed); nothing if
+    adv_optm isn't loaded"""
+    import sys
+
+    param_update = sys.modules.get("adv_optm.util.param_update")
+    generators = getattr(param_update, "_generators", None)
+    if not isinstance(generators, dict):
+        return
+    for device in {_exact_device(torch.device(train_device)), torch.device("cpu")}:
+        if device not in generators:
+            generators[device] = torch.Generator(device=device)
+        generators[device].manual_seed(step_seed)

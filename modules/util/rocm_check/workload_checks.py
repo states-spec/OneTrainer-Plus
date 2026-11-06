@@ -437,11 +437,12 @@ def training_features(ctx: Ctx, rec: Rec):
 
 @check(SECTION, "training seed: the same seed trains alike, another seed differently, one seed per run (Random "
                 "repeatable, OT_SEED replaces it)", full_only=True, timeout=3600.0,
-       note="trains a tiny random Chroma from scratch six times: a few minutes")
+       note="trains a tiny random Chroma nine times: a few minutes")
 def training_seed(ctx: Ctx, rec: Rec):
     # The training tab's Training Seed (modules/util/training_seed.py): every random source of a run comes from it (the
-    # global generators at the start, seed * 2^32 + step for the per-step generators). These runs start from a fresh
-    # LoRA (no initial LoRA file), without OT_SEED unless a run sets it
+    # global generators at the start, step + a 32-bit hash of the seed for the per-step generators). These runs start
+    # from a fresh LoRA (no initial LoRA file), without OT_SEED unless a run sets it; two more start from one saved LoRA,
+    # so only the per-step randomness (noise, timesteps, stochastic rounding) can tell their seeds apart
     from modules.util.rocm_check.tiny_chroma import build_dataset, build_tiny_chroma
 
     base_dir = tempfile.mkdtemp(prefix="rocm_check_seed_", dir=ctx.out_dir if os.path.isdir(ctx.out_dir) else None)
@@ -450,12 +451,12 @@ def training_seed(ctx: Ctx, rec: Rec):
         model = build_tiny_chroma(os.path.join(base_dir, "model"))
         data = build_dataset(os.path.join(base_dir, "data"), count=8, size=256)
 
-        def run(name: str, mode: str, seed: int, env: dict | None = None) -> dict:
+        def run(name: str, mode: str, seed: int, env: dict | None = None, extra: dict | None = None) -> dict:
             run_dir = os.path.join(base_dir, name)
             os.makedirs(run_dir, exist_ok=True)
             config = _base_config(ctx, model, data, run_dir, 2)
             config.update({"training_seed_mode": mode, "training_seed": seed, "sample_after_unit": "NEVER",
-                           "backup_after_unit": "NEVER", "backup_before_save": False})
+                           "backup_after_unit": "NEVER", "backup_before_save": False, **(extra or {})})
             result = _train(ctx, run_dir, config, {"OT_SEED": "", **(env or {})}, [], "diag")
             with open(os.path.join(run_dir, "diag.log"), encoding="utf-8", errors="replace") as f:
                 result["log"] = f.read()
@@ -475,6 +476,11 @@ def training_seed(ctx: Ctx, rec: Rec):
         repeat = run("random_repeated", "FIXED", int(match.group(1))) if match else None
         if match is None and randomized["weights"] is not None:
             rec.fail("the Random run didn't print its seed")
+        # the same start for two seeds: a run at learning rate 0 saves it
+        start = run("initial_lora", "FIXED", 7, extra={"learning_rate": 0, "epochs": 1})
+        same_start = {"lora_model_name": start["output"]}
+        from_start_7 = run("fixed_7_same_start", "FIXED", 7, extra=same_start) if start["weights"] else None
+        from_start_8 = run("fixed_8_same_start", "FIXED", 8, extra=same_start) if start["weights"] else None
 
         def compare(label: str, a: dict, b: dict | None, same: bool):
             nonlocal failed
@@ -497,6 +503,10 @@ def training_seed(ctx: Ctx, rec: Rec):
         compare("Fixed 7 vs Fixed 7 again", fixed_a, fixed_b, True)
         compare("Fixed 7 vs Fixed 8", fixed_a, other, False)
         compare("OT_SEED=7 over a config with seed 3 vs Fixed 7", env_seed, fixed_a, True)
+        if from_start_7 is not None:
+            # torch's CPU generator reads only the low 32 bits of a seed: the seed's part has to be in them
+            compare("Fixed 7 vs Fixed 8 from the same saved LoRA (noise, timesteps, rounding)", from_start_7,
+                    from_start_8, False)
         if match:
             compare(f"Random (seed {match.group(1)}) vs Fixed {match.group(1)}", randomized, repeat, True)
     finally:
