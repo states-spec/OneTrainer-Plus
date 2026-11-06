@@ -519,6 +519,132 @@ def training_seed(ctx: Ctx, rec: Rec):
             shutil.rmtree(base_dir, ignore_errors=True)
 
 
+def _compiled_variants(ctx: Ctx) -> list[tuple[str, dict, list[str]]]:
+    # (name, config changes, --config-value overrides), each trained eagerly and with Compile transformer blocks.
+    # On the CPU, layer offloading moves between "cpu" and "cpu:1" (different devices to the conductor, same memory)
+    offload = ["transformer.offload_fraction=0.5", "transformer.activation_offloading=true",
+               *([] if ctx.is_gpu else ["temp_device=cpu:1"])]
+    variants = [
+        ("LoRA", {}, []),
+        # the offloading path compiles the checkpointed block alone, the conductor stays outside the graph
+        ("layer + activation offloading", {}, offload),
+        # no checkpoint inside the compiled block: the partitioner decides what the backward keeps
+        ("without gradient checkpointing", {}, ["transformer.gradient_checkpointing=false"]),
+        ("DoRA", {"lora_decompose": True}, []),
+        ("LoKr with DoRA", {"peft_type": "LOKR", "lora_decompose": True, "lokr_dim": 4}, []),
+        # CANS didn't compile in 20 minutes before its coefficients became an opaque op (oft_utils.cans_coefficients)
+        ("OFT with DoRA-OFT, CANS and spectral norm clipping",
+         {"peft_type": "OFT_2", "dora_oft": True, "oft_cans": True, "oft_clipped_norm": 0.5, "oft_block_size": 8}, []),
+        ("float8 transformer weights", {}, ["transformer.weight_dtype=FLOAT_8"]),
+    ]
+    if ctx.is_gpu:  # its backward is a Triton kernel: no CPU training
+        variants.append(("int W8A8 transformer weights", {}, ["transformer.weight_dtype=INT_W8A8"]))
+    return variants
+
+
+def _compile_stats(log: str) -> tuple[int, int]:
+    # compile_util's progress status names every compile, "compiling kernel <frame> <direction> (variant #<n>)"; the
+    # children run with TORCH_LOGS=recompiles,graph_breaks, so a break would be logged (fullgraph raises on one anyway)
+    variants = set(re.findall(r"compiling kernel (\d+) (forward|backward) \(variant #(\d+)\)", log))
+    return len(variants), len(re.findall(r"Graph break", log))
+
+
+@check(SECTION, "compiled training: Compile transformer blocks vs eager on the tiny Chroma (LoRA, offloading, no "
+                "checkpointing, DoRA, LoKr, OFT with CANS, float8, int W8A8), compiles and graph breaks",
+       full_only=True, timeout=7200.0,
+       note="trains the tiny Chroma about 18 times, half of them compiled in a fresh compile cache: 15-30 minutes")
+def compiled_training(ctx: Ctx, rec: Rec):
+    # torch.compile changes the rounding (fused elementwise kernels keep fp32 in between), so a compiled run is compared
+    # with its eager twin by size, not bit by bit: the first step's loss (the same weights, so the forward pass alone)
+    # and the trained weights, against the gap between two seeds (training seed: ~0.8 from the same LoRA)
+    from modules.util.rocm_check.tiny_chroma import build_dataset, build_tiny_chroma
+
+    base_dir = tempfile.mkdtemp(prefix="rocm_check_compile_", dir=ctx.out_dir if os.path.isdir(ctx.out_dir) else None)
+    failed = False
+    try:
+        model = build_tiny_chroma(os.path.join(base_dir, "model"))
+        data = build_dataset(os.path.join(base_dir, "data"), count=8, size=256)
+        # a fresh compile cache: the first compiled run compiles everything, the repeat shows what the cache saves
+        env = {"TORCH_LOGS": "recompiles,graph_breaks",
+               "TORCHINDUCTOR_CACHE_DIR": os.path.join(base_dir, "torchinductor")}
+
+        def run(name: str, changes: dict, values: list[str]) -> dict:
+            run_dir = os.path.join(base_dir, re.sub(r"[^a-z0-9]+", "_", name.lower()))
+            os.makedirs(run_dir, exist_ok=True)
+            config = _base_config(ctx, model, data, run_dir, 2)
+            config.update(json.loads(json.dumps(changes)))
+            result = _train(ctx, run_dir, config, env, values, "diag")
+            with open(os.path.join(run_dir, "diag.log"), encoding="utf-8", errors="replace") as f:
+                result["log"] = f.read()
+            return result
+
+        def finished(name: str, r: dict) -> dict | None:
+            nonlocal failed
+            if r["rc"] != 0 or not os.path.exists(r["output"]):
+                failed = True
+                rec.fail(f"{name}: training failed (exit code {r['rc']}): " + r["tail"])
+                return None
+            w = _weights(r["output"])
+            count, blank = _sample_images(r["samples"])
+            if not all(finite(v) for v in w.values()) or count == 0 or blank:
+                failed = True
+                rec.fail(f"{name}: NaN/inf weights or missing/blank samples ({count} images, {blank} blank)")
+                return None
+            return w
+
+        def step_ms(r: dict) -> float:
+            from modules.util.diag_report import load, summarize
+            return (summarize(load(r["diag"])).get("step s median") or 0) * 1000 if os.path.exists(r["diag"]) else 0
+
+        for name, changes, values in _compiled_variants(ctx):
+            eager = run(f"{name} eager", changes, values)
+            w_eager = finished(f"{name}, eager", eager)
+            if w_eager is None:
+                continue  # not a compile problem
+            compiled = run(f"{name} compiled", changes, [*values, "compile=true"])
+            w_compiled = finished(f"{name}, compiled", compiled)
+            if w_compiled is None:
+                continue
+            graphs, breaks = _compile_stats(compiled["log"])
+            diff = _weights_diff(w_eager, w_compiled)
+            eager_losses, compiled_losses = _losses(eager["diag"]), _losses(compiled["diag"])
+            first = min(eager_losses.keys() & compiled_losses.keys(), default=None)
+            first_diff = abs(eager_losses[first] - compiled_losses[first]) / max(abs(eager_losses[first]), 1e-12) \
+                if first is not None else float("inf")
+            text = (f"{name}: compiled vs eager: first loss {first_diff:.1e}, weights {diff:.1e}; {graphs} compiled "
+                    f"variants, {breaks} graph breaks; {compiled['seconds']:.0f} s vs {eager['seconds']:.0f} s, "
+                    f"step {step_ms(compiled):.0f} vs {step_ms(eager):.0f} ms")
+            rec.metric(f"{name}: compiled run seconds", compiled["seconds"])
+            if graphs == 0 or breaks or first_diff > 2e-2 or diff > 0.3:
+                failed = True
+                rec.fail(f"{text}: " + ("nothing was compiled" if graphs == 0 else "graph breaks" if breaks else
+                                        "the compiled forward pass differs" if first_diff > 2e-2 else
+                                        "trained far apart (two seeds: ~0.8)"))
+            elif diff > 0.15:  # rounding alone: 0.05-0.09 on the CPU (LoKr the most)
+                rec.warn(f"{text}: more apart than rounding usually makes them")
+            else:
+                rec.line(f"ok: {text}")
+
+            if name == "LoRA":
+                # the same compiled run again, from the compile cache the first one filled
+                again = run("LoRA compiled again", {}, ["compile=true"])
+                w_again = finished("LoRA, compiled again", again)
+                if w_again is not None:
+                    repeat = _weights_diff(w_compiled, w_again)
+                    text = (f"LoRA compiled again (warm compile cache): {again['seconds']:.0f} s vs "
+                            f"{compiled['seconds']:.0f} s cold, weights vs the first compiled run {repeat:.1e}")
+                    if repeat == 0:
+                        rec.line(f"ok: {text} (bit-identical)")
+                    else:
+                        rec.warn(f"{text}: compiled runs don't repeat bit-exactly here, so compare runs with Compile "
+                                 f"set the same way and expect rounding-level differences between them")
+    finally:
+        if failed:
+            rec.line(f"the runs are kept in {base_dir} (each run's diag.log and diag.jsonl)")
+        else:
+            shutil.rmtree(base_dir, ignore_errors=True)
+
+
 @check(SECTION, "tiny Chroma components (T5, VAE, transformer + LoRA) on the GPU vs the CPU", gpu_only=True)
 def components(ctx: Ctx, rec: Rec):
     """the model loaded through the real ChromaModelLoader on both devices, the same inputs: the text encoder through

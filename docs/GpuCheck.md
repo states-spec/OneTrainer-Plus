@@ -5,7 +5,7 @@ GPUs on ROCm, where kernels are less tested than on CUDA, but it runs on CUDA to
 
 ```sh
 ./run-cmd.sh rocm_check            # quick mode, about 10 minutes (half of it the tiny-model training runs)
-./run-cmd.sh rocm_check --full     # more dtypes, sizes and optimizers, plus TunableOp, torch.compile and training features (45-60 min)
+./run-cmd.sh rocm_check --full     # more dtypes, sizes and optimizers, plus TunableOp, torch.compile, compiled training and training features (60-90 min)
 ./run-cmd.sh rocm_check --list     # the checks
 ./run-cmd.sh rocm_check --only sdpa offloading     # checks whose "section / name" contains one of these
 ./run-cmd.sh rocm_check --resolutions 512 768 1024 # sizes for the speed checks (default 512 1024)
@@ -73,7 +73,10 @@ results up to the check that was running (the report names it). The exit code is
    TunableOp, MIOpen's find mode, the allocator with `expandable_segments` (its memory use, and the conv, VAE
    and, with `--full`, offloading checks run again under each allocator; wrong results under `expandable_segments`
    fail the check only when your setup uses it, and warn otherwise), the offloading and disk-streaming
-   checks and a model part move with and without dedicated MemPools (`OT_ROCM_MEM_POOLS`), and `torch.compile`.
+   checks and a model part move with and without dedicated MemPools (`OT_ROCM_MEM_POOLS`), and `torch.compile` (the
+   Compile transformer blocks option) on a transformer block: alone, and as training compiles it, with a LoRA on
+   every layer inside OneTrainer's checkpoint layer (speed, peak memory and first compile time, compiled against
+   eager).
 
 5. **Training run (tiny Chroma)**: a Chroma model with random weights and a small masked, captioned dataset, built
    offline in a few seconds, trained through the real `scripts/train.py` with the main workload's settings (the Chroma
@@ -94,6 +97,13 @@ results up to the check that was running (the report names it). The exit code is
    back pass, a restarting scheduler, saves every step with EMA, float8 weights. Each run has to finish
    with finite weights, and each saved LoRA is loaded back as the starting LoRA of a run at learning rate 0, which has
    to save exactly the same tensors (so no layer, adapter part or bundled embedding is lost or misplaced on loading).
+   With `--full`, Compile transformer blocks is also trained against the same run without it, in a fresh compile
+   cache: the workload LoRA (and the same compiled run again, from the cache the first one filled), layer and
+   activation offloading, no gradient checkpointing, DoRA, LoKr with DoRA, OFT with CANS, DoRA-OFT and norm
+   clipping, float8 and (on a GPU) int W8A8 weights. Compiling changes the rounding, so the two are compared by
+   size: the first step's loss (the same weights, so only the forward pass can differ) and the trained weights,
+   which must stay far closer than two seeds; a graph break, or nothing compiled, fails. The report line gives
+   each pair's compiled variants and run and step times.
    When a run fails, the folder with every run is kept (the report names it), each with its whole output in
    `diag.log`. A run that crashes in native code (ROCm aborts the process on a GPU fault or a failed assert in a
    kernel: exit code -6) shows the runtime's message and where its threads were in the report line.
