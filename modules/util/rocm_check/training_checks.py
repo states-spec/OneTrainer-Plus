@@ -386,6 +386,59 @@ def adopt_adv_nesterov(ctx: Ctx, rec: Rec):
                                f"(limit 1e-3)")
 
 
+@check(SECTION, "adv_optm's random generators follow the training seed (stochastic rounding, int8_sr state)")
+def adv_optm_generators(ctx: Ctx, rec: Rec):
+    # adv_optm keeps its own per-device generators (adv_optm.util.param_update._generators), seeded with 42 in every
+    # optimizer's constructor. GenericTrainer.train reseeds them every step from the training seed
+    # (training_seed.seed_adv_optm_generators); this fails if a later adv_optm moves them, so the seed no longer
+    # reaches its stochastic rounding (the training-seed runs don't use bf16 rounding and wouldn't notice)
+    import sys
+
+    from modules.util.training_seed import seed_adv_optm_generators, training_seed_offset
+
+    import adv_optm
+    from adv_optm import Adopt_adv
+
+    param_update = sys.modules.get("adv_optm.util.param_update")
+    if not isinstance(getattr(param_update, "_generators", None), dict):
+        rec.fail(f"adv_optm {adv_optm.__version__} has no adv_optm.util.param_update._generators: the training seed "
+                 f"doesn't reach its random draws; update modules/util/training_seed.py")
+        return
+    calls = [0]
+    original = param_update._get_random_int_for_sr
+
+    def counted(*args, **kwargs):
+        calls[0] += 1
+        return original(*args, **kwargs)
+
+    class _Seed:
+        def __init__(self, seed):
+            self.training_seed = seed
+
+    def run(seed):
+        g = torch.Generator().manual_seed(0)
+        p = nn.Parameter((torch.randn(64, 64, generator=g) * 0.1).to(ctx.device, torch.bfloat16))
+        optimizer = Adopt_adv([p], lr=1e-3, state_precision="int8_sr", stochastic_rounding=True)
+        g = torch.Generator().manual_seed(1)
+        for step in range(6):
+            seed_adv_optm_generators(training_seed_offset(_Seed(seed)) + step, ctx.device)
+            p.grad = torch.randn(p.shape, generator=g).to(ctx.device, torch.bfloat16)
+            optimizer.step()
+        return p.detach().float().cpu()
+
+    param_update._get_random_int_for_sr = counted
+    try:
+        a, b, c = run(7), run(7), run(8)
+    finally:
+        param_update._get_random_int_for_sr = original
+    rec.line(f"adv_optm {adv_optm.__version__}: {calls[0]} draws from its generators in 3 x 6 steps")
+    if calls[0] == 0:
+        rec.warn("adv_optm no longer draws its stochastic rounding from these generators: check where it does now")
+        return
+    rec.expect(torch.equal(a, b), "the same seed twice: bit-identical weights")
+    rec.expect(not torch.equal(a, c), f"seed 7 vs 8: different weights ({(a - c).abs().max().item():.1e} apart)")
+
+
 @check(SECTION, "Compiled Optimizer: every ADV optimizer compiles once per parameter shape, also run after run",
        full_only=True, timeout=2400.0)
 def compiled_adv_optimizers(ctx: Ctx, rec: Rec):

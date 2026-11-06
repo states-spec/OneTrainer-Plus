@@ -424,6 +424,12 @@ def _prepare_compiled_adv_optimizer(optimizer: torch.optim.Optimizer):
     functions = [getattr(cls, name) for name in _ADV_COMPILED_FUNCTIONS if hasattr(cls, name)]
     if hasattr(optimizer, "_compiled_adam_step_fns"):
         functions.append(Muon_AuxAdam._adam_step_parameter)
+    if not functions or not any(isinstance(getattr(optimizer, attr, None), dict)
+                                for attr in ("_compiled_step_fns", "_compiled_muon_step_fns", "_compiled_adam_step_fns")):
+        # adv_optm internals this relies on (2.6.3); a later version without them gets no workaround, and may need none
+        print(f"Warning: adv_optm {_adv_optm_version()}'s {cls.__name__} no longer has the compiled step functions "
+              f"OneTrainer+'s Compiled Optimizer workaround expects (create._prepare_compiled_adv_optimizer). If "
+              f"training stops with FailOnRecompileLimitHit, turn Compiled Optimizer off; rocm_check --full tests it.")
     for fn in functions:
         reset_code(fn.__code__)
 

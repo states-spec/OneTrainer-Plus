@@ -95,14 +95,29 @@ def _exact_device(device: torch.device) -> torch.device:
     return device
 
 
+_adv_optm_warned = False
+
+
 def seed_adv_optm_generators(step_seed: int, train_device: torch.device):
     """reseeds adv_optm's per-device generators (GenericTrainer.train, every step, with the step's seed); nothing if
-    adv_optm isn't loaded"""
+    adv_optm isn't loaded. They are adv_optm internals (adv_optm.util.param_update._generators, a dict of device ->
+    torch.Generator, 2.5-2.6.3): if a later adv_optm moves them, this warns once instead of doing nothing silently
+    (rocm_check section 3 "adv_optm's random generators follow the training seed" fails then too)"""
     import sys
 
+    global _adv_optm_warned
+    if "adv_optm" not in sys.modules:
+        return
     param_update = sys.modules.get("adv_optm.util.param_update")
     generators = getattr(param_update, "_generators", None)
     if not isinstance(generators, dict):
+        if not _adv_optm_warned:
+            _adv_optm_warned = True
+            version = getattr(sys.modules["adv_optm"], "__version__", "unknown")
+            print(f"Warning: adv_optm {version} keeps its random generators somewhere OneTrainer+ doesn't know, so "
+                  f"the training seed doesn't reach its stochastic rounding (and SignSGD's stochastic sign, Muon's "
+                  f"low-rank orthogonalization). Training works, but runs with the same seed may differ there. "
+                  f"modules/util/training_seed.py needs an update for this adv_optm.")
         return
     for device in {_exact_device(torch.device(train_device)), torch.device("cpu")}:
         if device not in generators:

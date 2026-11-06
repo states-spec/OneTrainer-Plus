@@ -47,6 +47,8 @@ results up to the check that was running (the report names it). The exit code is
      match AdamW_adv's Nesterov step
    - ADOPT_ADV's Nesterov step (broken before adv_optm 2.6.2): the same gradients at scales 1e-2 and 1e2 have to move
      the weights the same way
+   - adv_optm's own random generators (stochastic rounding of bf16 weights and 8-bit state) follow the training seed:
+     the same seed steps alike, another differently (fails if a new adv_optm moved them)
    - with `--full`, Compiled Optimizer on every ADV optimizer: compiles once per parameter shape (adv_optm's compiled
      step used to recompile per parameter or per step until torch stopped it), also over three optimizers in a row as
      in the UI, and steps like the uncompiled optimizer
