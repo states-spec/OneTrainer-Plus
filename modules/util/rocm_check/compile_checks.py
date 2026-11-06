@@ -37,8 +37,8 @@ def _ids(tokens: int, h: int, w: int, axes: int = 3) -> torch.Tensor:
 
 def _sd15(real: bool):
     from diffusers import UNet2DConditionModel
-    if real:  # diffusers' defaults are SD1.5's UNet
-        model, size, cross, tokens = UNet2DConditionModel(), 64, 768, 77
+    if real:  # diffusers' defaults are SD1.5's UNet, but for the text width
+        model, size, cross, tokens = UNet2DConditionModel(sample_size=64, cross_attention_dim=768), 64, 768, 77
     else:
         model = UNet2DConditionModel(
             sample_size=16, block_out_channels=(32, 64), layers_per_block=1, cross_attention_dim=32,

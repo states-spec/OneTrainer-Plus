@@ -112,6 +112,19 @@ results up to the check that was running (the report names it). The exit code is
    When a run fails, the folder with every run is kept (the report names it), each with its whole output in
    `diag.log`. A run that crashes in native code (ROCm aborts the process on a GPU fault or a failed assert in a
    kernel: exit code -6) shows the runtime's message and where its threads were in the report line.
+6. **Compile per model family** (`--full`): Compile transformer blocks on every model family OneTrainer compiles
+   (SD 1.5, SDXL, PixArt, Sana, SD3/3.5, Flux.1, Chroma, Flux.2, Qwen-Image, Anima, Z-Image, Hunyuan Video, Ernie,
+   Ideogram 4, Krea 2), with no model files or configs: each family's denoiser is built with random weights, wrapped
+   the way training wraps it (gradient checkpointing on, a rank-4 LoRA on every linear layer), and one training step,
+   a sampling pass (eval mode, no gradients) and a compiled run with layer and activation offloading are compared with
+   eager: output, LoRA gradients, graph breaks, and no recompile on the second step. On a GPU each family (but Ernie,
+   Ideogram and Krea 2) also runs at its real width (a few blocks at the real hidden size, 512 px; the whole UNet for
+   SD 1.5 and SDXL), with the step time and peak memory compiled and eager. HiDream can't be compiled (its
+   mixture-of-experts layers choose experts from the data), and training refuses it; the check confirms it still
+   fails, and warns once it doesn't.
+   ```sh
+   ./run-cmd.sh rocm_check --full --only "compile per model family"
+   ```
 
 ## Reading the results
 
