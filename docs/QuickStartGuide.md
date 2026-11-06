@@ -93,6 +93,26 @@ settings, but here are some examples of the most important ones:
 - Accumulation Steps: If you can't increase the Batch Size because of VRAM constraints, you can increase this setting to
   create the same effect, but slow down the training even more.
 
+### Training Seed
+
+The training seed decides where a run starts (the LoRA or embedding initialization), its dropout, and the noise and
+timesteps of every step. With the same seed and settings, two runs train alike (exactly so on the CPU), so a change in
+one setting shows its own effect instead of being mixed with a different random start. Set it in the training tab:
+
+- Off (the default): as before. Every run starts from a new random initialization, and every run gets the same noise
+  sequence.
+- Fixed: the seed in the Seed field, for every run. Use it to compare settings on the same seed.
+- Increment / Decrement: trains with the seed shown, then moves it one up or down for the next run, to try a few seeds
+  in a row.
+- Random: a new seed for every run, written into the Seed field before the run starts. To repeat a run you liked,
+  switch to Fixed with that seed.
+
+The seed a run used is printed when it starts ("Training seed: ...") and saved with the run's config in the workspace
+(`workspace/config/<run name>.json`). The data order and augmentations follow each concept's own seed (concepts tab),
+and validation keeps its own fixed seed. From the command line, Increment and Decrement can't change the config file, so
+`scripts/train.py` trains with the value in the file; Random picks a new seed there too. To continue a backup on the
+same noise, use Fixed with the seed of the run that made it.
+
 "Train Text Encoder" and "Train UNet" can be deactivated to only train parts of the model. In most cases, both should
 stay active. You can also specify how many epochs each part should be trained for, as well as a specific learning rate
 for each part.

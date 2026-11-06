@@ -40,6 +40,7 @@ from modules.util.run_diagnostics import apply_reproducibility_env, diagnostics
 from modules.util.time_util import get_string_timestamp
 from modules.util.torch_util import fp8_matmul_supported, torch_gc
 from modules.util.tqdm_util import tqdm
+from modules.util.training_seed import apply_training_seed, check_training_seed
 from modules.util.TrainProgress import TrainProgress
 
 import torch
@@ -116,8 +117,11 @@ class GenericTrainer(BaseTrainer):
             raise ValueError("oft_clipped_norm must be greater than 0. Leave it empty to turn spectral norm clipping off.")
         self.__check_device_support()
         create.check_optimizer_config(self.config.optimizer)
+        check_training_seed(self.config)
         diagnostics.close()  # a run in this process (the UI) that ended in an error left its log open
         diagnostics.start(self.config, torch.device(self.config.train_device))
+        # the training seed first: OT_SEED (diagnostics, rocm_check) seeds the global generators over it
+        apply_training_seed(self.config)
         apply_reproducibility_env()
 
         if multi.is_master():

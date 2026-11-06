@@ -20,6 +20,15 @@ RUN_NAME_MODE = (
     "Custom: the name in the field, kept for every run."
 )
 
+TRAINING_SEED_MODE = (
+    "Off: as before, a new initialization every run and the same noise for every run. "
+    "Fixed: the seed below, every run, so runs that differ only in their settings start and step alike. "
+    "Increment / Decrement: trains with the seed below, then moves it one up / down for the next run. "
+    "Random: a new seed for each run, written into the field so the run can be repeated with Fixed. "
+    "The seed sets the LoRA/embedding initialization, dropout and each step's noise and timesteps; the data order "
+    "and augmentations follow each concept's own seed (concepts tab). Validation keeps its own fixed seed."
+)
+
 OUTPUT_DTYPE = (
     "Precision to use when saving the output model. "
     "bfloat16: the range of float32 at half the size, the usual choice. "

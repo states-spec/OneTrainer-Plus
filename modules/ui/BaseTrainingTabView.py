@@ -11,6 +11,8 @@ from modules.util.enum.LossScaler import LossScaler
 from modules.util.enum.Optimizer import Optimizer
 from modules.util.enum.TimestepDistribution import TimestepDistribution
 from modules.util.enum.TrainingMethod import TrainingMethod
+from modules.util.enum.TrainingSeedMode import TrainingSeedMode
+from modules.util.training_seed import MAX_TRAINING_SEED
 from modules.util.ui.validation_helpers import check_range, validate_resolution
 
 
@@ -372,6 +374,20 @@ class BaseTrainingTabView(ABC):
         self.components.label(frame, 10, 0, "Clip Grad Norm",
                               tooltip="Clips the gradient norm. Leave empty to disable gradient clipping. With Fused Back Pass, each parameter's gradient is clipped to this norm on its own instead of all gradients together.")
         self.components.entry(frame, 10, 1, ui_state, "clip_grad_norm")
+
+        # training seed
+        self.components.label(frame, 11, 0, "Training Seed",
+                              tooltip=dropdown_hints.TRAINING_SEED_MODE, wide_tooltip=True)
+        self.components.options(frame, 11, 1, [str(x) for x in list(TrainingSeedMode)], ui_state, "training_seed_mode")
+        seed_widgets = [
+            self.components.label(frame, 12, 0, "Seed",
+                                  tooltip=f"The training seed, 0 to {MAX_TRAINING_SEED}. Printed when training starts and saved with the run's config in the workspace (workspace/config). Increment / Decrement change it after each run, Random before each run."),
+            self.components.entry(frame, 12, 1, ui_state, "training_seed",
+                                  extra_validate=check_range(lower=0, upper=MAX_TRAINING_SEED,
+                                                             message=f"The seed must be between 0 and {MAX_TRAINING_SEED}")),
+        ]
+        self._enable_while(ui_state, "training_seed_mode", lambda value: str(value) != str(TrainingSeedMode.OFF),
+                           seed_widgets)
 
     def __create_base2_frame(self, master, row, controller, ui_state, video_training_enabled: bool = False,
                               supports_circular_padding: bool = False):

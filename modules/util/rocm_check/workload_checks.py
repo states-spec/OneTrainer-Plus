@@ -7,6 +7,7 @@ model's components (T5, VAE, transformer with a LoRA) on the GPU against the CPU
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -430,6 +431,77 @@ def training_features(ctx: Ctx, rec: Rec):
     finally:
         if failed:
             rec.line(f"the runs are kept in {base_dir} (each run's diag.log and diag.jsonl)")
+        else:
+            shutil.rmtree(base_dir, ignore_errors=True)
+
+
+@check(SECTION, "training seed: the same seed trains alike, another seed differently, Off as before, Random "
+                "repeatable", full_only=True, timeout=3600.0,
+       note="trains a tiny random Chroma from scratch six times: a few minutes")
+def training_seed(ctx: Ctx, rec: Rec):
+    # The training tab's Training Seed (modules/util/training_seed.py) seeds the LoRA initialization and adds
+    # seed * 2^32 to each step's noise seed. These runs start from a fresh LoRA (no initial LoRA file), without OT_SEED
+    from modules.util.rocm_check.tiny_chroma import build_dataset, build_tiny_chroma
+
+    base_dir = tempfile.mkdtemp(prefix="rocm_check_seed_", dir=ctx.out_dir if os.path.isdir(ctx.out_dir) else None)
+    failed = False
+    try:
+        model = build_tiny_chroma(os.path.join(base_dir, "model"))
+        data = build_dataset(os.path.join(base_dir, "data"), count=8, size=256)
+
+        def run(name: str, mode: str, seed: int, env: dict | None = None) -> dict:
+            run_dir = os.path.join(base_dir, name)
+            os.makedirs(run_dir, exist_ok=True)
+            config = _base_config(ctx, model, data, run_dir, 2)
+            config.update({"training_seed_mode": mode, "training_seed": seed, "sample_after_unit": "NEVER",
+                           "backup_after_unit": "NEVER", "backup_before_save": False})
+            result = _train(ctx, run_dir, config, {"OT_SEED": "", **(env or {})}, [], "diag")
+            with open(os.path.join(run_dir, "diag.log"), encoding="utf-8", errors="replace") as f:
+                result["log"] = f.read()
+            ok = result["rc"] == 0 and os.path.exists(result["output"])
+            result["weights"] = _weights(result["output"]) if ok else None
+            if not ok:
+                rec.fail(f"{name}: training failed (exit code {result['rc']}): {result['tail']}")
+            return result
+
+        fixed_a = run("fixed_7", "FIXED", 7)
+        fixed_b = run("fixed_7_again", "FIXED", 7)
+        other = run("fixed_8", "FIXED", 8)
+        zero = run("fixed_0", "FIXED", 0)
+        off = run("off_ot_seed_0", "OFF", 0, {"OT_SEED": "0"})
+        randomized = run("random", "RANDOM", 0)
+        match = re.search(r"Training seed: (\d+) \(Random\)", randomized["log"])
+        repeat = run("random_repeated", "FIXED", int(match.group(1))) if match else None
+        if match is None and randomized["weights"] is not None:
+            rec.fail("the Random run didn't print its seed")
+
+        def compare(label: str, a: dict, b: dict | None, same: bool):
+            nonlocal failed
+            if b is None or a["weights"] is None or b["weights"] is None:
+                failed = True
+                return
+            diff = _weights_diff(a["weights"], b["weights"])
+            worst = _loss_diff(_losses(a["diag"]), _losses(b["diag"]))[0]
+            text = f"{label}: weights {diff:.1e}, losses {worst:.1e}"
+            if same and diff == 0:
+                rec.line(f"ok: {text} (bit-identical)")
+            elif same and diff <= 1e-6:
+                rec.warn(f"{text}: not bit-identical (GPU kernels may round differently)")
+            elif not same and diff > 1e-3:
+                rec.line(f"ok: {text} (apart, as they should be)")
+            else:
+                failed = True
+                rec.fail(f"{text}: expected {'the same weights' if same else 'different weights'}")
+
+        compare("Fixed 7 vs Fixed 7 again", fixed_a, fixed_b, True)
+        compare("Fixed 7 vs Fixed 8", fixed_a, other, False)
+        # seed 0 adds 0 to each step's noise seed, so Fixed 0 is Off with the global generators seeded the same way
+        compare("Fixed 0 vs Off with OT_SEED=0 (Off keeps the noise as before)", zero, off, True)
+        if match:
+            compare(f"Random (seed {match.group(1)}) vs Fixed {match.group(1)}", randomized, repeat, True)
+    finally:
+        if failed:
+            rec.line(f"the runs are kept in {base_dir} (each run's .log and .jsonl)")
         else:
             shutil.rmtree(base_dir, ignore_errors=True)
 

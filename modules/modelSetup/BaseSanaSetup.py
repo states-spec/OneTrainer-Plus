@@ -17,6 +17,7 @@ from modules.util.checkpointing_util import (
 )
 from modules.util.config.TrainConfig import TrainConfig
 from modules.util.dtype_util import disable_fp16_autocast_context
+from modules.util.training_seed import training_seed_offset
 from modules.util.TrainProgress import TrainProgress
 
 import torch
@@ -142,7 +143,7 @@ class BaseSanaSetup(
             deterministic: bool = False,
     ) -> dict:
         with model.autocast_context:
-            batch_seed = 0 if deterministic else train_progress.global_step * multi.world_size() + multi.rank()
+            batch_seed = 0 if deterministic else train_progress.global_step * multi.world_size() + multi.rank() + training_seed_offset(config)
             generator = torch.Generator(device=config.train_device)
             generator.manual_seed(batch_seed)
             rand = Random(batch_seed)

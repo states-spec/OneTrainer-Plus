@@ -29,6 +29,7 @@ from modules.util.enum.RunNameMode import RunNameMode
 from modules.util.enum.TimestepDistribution import TimestepDistribution
 from modules.util.enum.TimeUnit import TimeUnit
 from modules.util.enum.TrainingMethod import TrainingMethod
+from modules.util.enum.TrainingSeedMode import TrainingSeedMode
 from modules.util.enum.VideoFormat import VideoFormat
 from modules.util.ModelNames import EmbeddingName, ModelNames
 from modules.util.ModelWeightDtypes import ModelWeightDtypes
@@ -499,6 +500,8 @@ class TrainConfig(BaseConfig):
     learning_rate_cycles: float
     learning_rate_min_factor: float
     epochs: int
+    training_seed_mode: TrainingSeedMode
+    training_seed: int
     batch_size: int
     gradient_accumulation_steps: int
     ema: EMAMode
@@ -1298,6 +1301,8 @@ class TrainConfig(BaseConfig):
         data.append(("learning_rate_cycles", 1.0, float, False))
         data.append(("learning_rate_min_factor", 0.0, float, False))
         data.append(("epochs", 100, int, False))
+        data.append(("training_seed_mode", TrainingSeedMode.OFF, TrainingSeedMode, False))
+        data.append(("training_seed", 42, int, False))
         data.append(("batch_size", 1, int, False))
         data.append(("gradient_accumulation_steps", 1, int, False))
         data.append(("ema", EMAMode.OFF, EMAMode, False))

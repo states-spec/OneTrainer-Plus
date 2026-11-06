@@ -27,6 +27,7 @@ from modules.util.config.TrainConfig import (
 from modules.util.profiling_util import PeakMemoryRecorder
 from modules.util.tensorboard_util import TensorboardProcess
 from modules.util.torch_util import print_fragmentation, torch_gc
+from modules.util.training_seed import seed_after_run, seed_for_new_run
 from modules.util.TrainProgress import TrainProgress
 from modules.util.ui.browser_util import open_url
 from modules.util.ui.validation import flush_and_validate_all
@@ -269,11 +270,13 @@ class TrainUIController:
         )
 
         trainer = None
+        seed_used = False
         try:
             # in the try: a trainer that couldn't be created (e.g. a workspace folder that can't be made) ended the
             # thread here, and the UI stayed on "Stop Training" until it was restarted
             trainer = create.create_trainer(self.train_config, self.training_callbacks, self.training_commands, reattach=self.view.get_cloud_reattach())
             trainer.start()
+            seed_used = True  # start() seeded the run (a check that stops it before then leaves the seed unused)
             if self.train_config.cloud.enabled:
                 self.view.sync_cloud_secrets()
 
@@ -318,6 +321,9 @@ class TrainUIController:
         else:
             self.on_update_status("Stopped")
 
+        if seed_used:
+            self.view.schedule_on_main_thread(self.__advance_training_seed)
+
         # queue UI update on Tk main thread; on_training_stopped applies shared styles, avoid potential race/crash
         self.view.schedule_on_main_thread(lambda: self.view.on_training_stopped(error_caught))
 
@@ -328,6 +334,14 @@ class TrainUIController:
         name = prepare_run_name(self.train_config.training_method, self.train_config.run_name_mode,
                                 self.train_config.run_name, is_new_invocation=is_new_invocation)
         self.view.ui_state.get_var("run_name").set(name)
+
+    def __set_training_seed(self, seed: int):
+        if seed != self.train_config.training_seed:
+            self.view.ui_state.get_var("training_seed").set(str(seed))
+
+    def __advance_training_seed(self):
+        # Increment / Decrement: the run trained with the value shown; the next run gets the one after it
+        self.__set_training_seed(seed_after_run(self.train_config.training_seed_mode, self.train_config.training_seed))
 
     def __run_name_used(self) -> bool:
         # an automatic (Default/Friendly) name that a run has already used, e.g. one that came with a loaded config:
@@ -348,6 +362,8 @@ class TrainUIController:
 
             # automatic names are new for each run: one a run already used would make this run write over its model
             self.sync_run_name(is_new_invocation=self.__run_name_used())
+            # Random: a new seed for each run, shown in the field (and saved with the run's config), so it can be repeated
+            self.__set_training_seed(seed_for_new_run(self.train_config.training_seed_mode, self.train_config.training_seed))
 
             if self.train_config.clear_cache_before_training and self.train_config.latent_caching \
                     and not self.view.confirm("Clear Cache Before Training", "Clear cache?"):
