@@ -6,6 +6,7 @@ import argparse
 import os
 import sys
 
+import modules.util.rocm_check.compile_checks  # noqa: F401
 import modules.util.rocm_check.env_checks  # noqa: F401 (registers the checks, in report order)
 import modules.util.rocm_check.kernel_checks  # noqa: F401
 import modules.util.rocm_check.perf_checks  # noqa: F401
