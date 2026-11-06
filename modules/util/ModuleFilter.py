@@ -53,6 +53,10 @@ class ModuleFilter:
         Returns:
             bool: True if the module name matches, False otherwise.
         """
+        # Compile transformer blocks puts each block into a checkpoint layer that holds it as ".checkpoint", so
+        # "transformer_blocks.0.attn.to_q" became "transformer_blocks.0.checkpoint.attn.to_q" and a filter spanning
+        # it (a fine-tune's layer filter, the quantization filter) matched nothing; saved keys drop it the same way
+        module_name = module_name.replace(".checkpoint.", ".")
         if not self._pattern:
             is_match = True
         else:
