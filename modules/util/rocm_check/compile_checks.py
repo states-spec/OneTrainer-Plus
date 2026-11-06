@@ -83,7 +83,7 @@ def _pixart(real: bool):
                                    caption_channels=4096, num_embeds_ada_norm=1000, **common)
         size, caption, tokens = 64, 4096, 120
     else:
-        model = Transformer2DModel(sample_size=8, num_layers=1, patch_size=2, attention_head_dim=2,
+        model = Transformer2DModel(sample_size=8, num_layers=3, patch_size=2, attention_head_dim=2,
                                    num_attention_heads=2, in_channels=4, out_channels=8, cross_attention_dim=8,
                                    caption_channels=None, num_embeds_ada_norm=8, **common)
         size, caption, tokens = 8, 8, 8
@@ -101,7 +101,7 @@ def _sana(real: bool):
                                        mlp_ratio=2.5, sample_size=32)
         size, channels, caption, tokens = 32, 32, 2304, 300
     else:
-        model = SanaTransformer2DModel(patch_size=1, in_channels=4, out_channels=4, num_layers=1, attention_head_dim=4,
+        model = SanaTransformer2DModel(patch_size=1, in_channels=4, out_channels=4, num_layers=3, attention_head_dim=4,
                                        num_attention_heads=2, num_cross_attention_heads=2, cross_attention_head_dim=4,
                                        cross_attention_dim=8, caption_channels=8, sample_size=16)
         size, channels, caption, tokens = 16, 4, 8, 8
@@ -118,7 +118,7 @@ def _sd3(real: bool):
                                       pos_embed_max_size=384, dual_attention_layers=(0,), qk_norm="rms_norm")
         size, channels, joint, pooled, tokens = 64, 16, 4096, 2048, 333
     else:
-        model = SD3Transformer2DModel(sample_size=16, patch_size=1, in_channels=4, num_layers=2, attention_head_dim=8,
+        model = SD3Transformer2DModel(sample_size=16, patch_size=1, in_channels=4, num_layers=3, attention_head_dim=8,
                                       num_attention_heads=4, caption_projection_dim=32, joint_attention_dim=32,
                                       pooled_projection_dim=64, out_channels=4, pos_embed_max_size=96,
                                       dual_attention_layers=(0,), qk_norm="rms_norm")
@@ -138,7 +138,7 @@ def _flux_like(cls_name: str, real: bool):
                   "axes_dims_rope": (16, 56, 56)}
         hw, channels, joint, pooled, tokens = 32, 64, 4096, 768, 256
     else:
-        kwargs = {"patch_size": 1, "in_channels": 4, "num_layers": 1, "num_single_layers": 1, "attention_head_dim": 16,
+        kwargs = {"patch_size": 1, "in_channels": 4, "num_layers": 2, "num_single_layers": 2, "attention_head_dim": 16,
                   "num_attention_heads": 2, "joint_attention_dim": 32, "axes_dims_rope": (4, 4, 8)}
         hw, channels, joint, pooled, tokens = 4, 4, 32, 32, 16
     if chroma:
@@ -165,7 +165,7 @@ def _flux2(real: bool):
                                         timestep_guidance_channels=256, axes_dims_rope=(32, 32, 32, 32))
         hw, channels, joint, tokens = 32, 128, 7680, 256
     else:
-        model = Flux2Transformer2DModel(patch_size=1, in_channels=4, num_layers=1, num_single_layers=1,
+        model = Flux2Transformer2DModel(patch_size=1, in_channels=4, num_layers=2, num_single_layers=2,
                                         attention_head_dim=16, num_attention_heads=2, joint_attention_dim=32,
                                         timestep_guidance_channels=256, axes_dims_rope=(4, 4, 4, 4))
         hw, channels, joint, tokens = 4, 4, 32, 16
@@ -186,7 +186,7 @@ def _qwen(real: bool):
                                             guidance_embeds=False, axes_dims_rope=(16, 56, 56))
         hw, channels, joint, tokens = 32, 64, 3584, 256
     else:
-        model = QwenImageTransformer2DModel(patch_size=2, in_channels=16, out_channels=4, num_layers=2,
+        model = QwenImageTransformer2DModel(patch_size=2, in_channels=16, out_channels=4, num_layers=3,
                                             attention_head_dim=16, num_attention_heads=4, joint_attention_dim=16,
                                             guidance_embeds=False, axes_dims_rope=(8, 4, 4))
         hw, channels, joint, tokens = 4, 16, 16, 8
@@ -206,7 +206,7 @@ def _anima(real: bool):
                                          rope_scale=(1.0, 4.0, 4.0), **common)
         size, channels, text, tokens = 64, 16, 1024, 256
     else:
-        model = CosmosTransformer3DModel(num_attention_heads=2, attention_head_dim=12, num_layers=2, mlp_ratio=2,
+        model = CosmosTransformer3DModel(num_attention_heads=2, attention_head_dim=12, num_layers=3, mlp_ratio=2,
                                          text_embed_dim=16, adaln_lora_dim=4, max_size=(4, 32, 32),
                                          rope_scale=(2.0, 1.0, 1.0), **common)
         size, channels, text, tokens = 16, 4, 16, 12
@@ -280,7 +280,7 @@ def _hunyuan_video(real: bool):
 
 def _ernie(real: bool):
     from diffusers import ErnieImageTransformer2DModel
-    model = ErnieImageTransformer2DModel(hidden_size=16, num_attention_heads=1, num_layers=2, ffn_hidden_size=16,
+    model = ErnieImageTransformer2DModel(hidden_size=16, num_attention_heads=1, num_layers=3, ffn_hidden_size=16,
                                          in_channels=16, out_channels=16, patch_size=1, text_in_dim=16, rope_theta=256,
                                          rope_axes_dim=(8, 4, 4), eps=1e-6, qk_layernorm=True)
     return model, lambda g: {"hidden_states": _randn((1, 16, 16, 16), g), "timestep": torch.tensor([1.0]),
@@ -295,7 +295,7 @@ def _ideogram(real: bool):
         OUTPUT_IMAGE_INDICATOR,
     )
     channels, llm, text, grid = 16, 24, 4, 2
-    model = Ideogram4Transformer2DModel(in_channels=channels, num_layers=2, attention_head_dim=8, num_attention_heads=4,
+    model = Ideogram4Transformer2DModel(in_channels=channels, num_layers=3, attention_head_dim=8, num_attention_heads=4,
                                         intermediate_size=32, adaln_dim=16, llm_features_dim=llm, rope_theta=10_000,
                                         mrope_section=(2, 1, 1), norm_eps=1e-5)
 
@@ -431,13 +431,35 @@ class _Setup:
         for name, module in list(model.named_modules()):
             if isinstance(module, nn.Linear):
                 lora = LoRAModule(name, module, 4, 4.0)
-                with torch.no_grad():  # LoRA up starts at 0: move it so the delta and the down gradients are exercised
+                with torch.no_grad():
+                    # both from one CPU generator: LoRAModule draws lora_down on its base layer's device, so with
+                    # offloading the offloaded layers' LoRAs would start elsewhere (CPU vs GPU generator) and an
+                    # offloaded run would be compared from different weights. LoRA up starts at 0: moved, so the
+                    # delta and the down gradients are exercised.
+                    lora.lora_down.weight.copy_(torch.randn(lora.lora_down.weight.shape, generator=gen)
+                                                / lora.lora_down.weight.shape[1] ** 0.5)
                     lora.lora_up.weight.copy_(torch.randn(lora.lora_up.weight.shape, generator=gen) * 0.01)
                 lora.to(ctx.device)
                 lora.hook_to_module()
                 self.loras.append(lora)
         self.inputs = _to(self.make_inputs(torch.Generator().manual_seed(1)), ctx.device, self.dtype)
         self.kwargs = {"return_dict": False} if "return_dict" in inspect.signature(model.forward).parameters else {}
+
+    def offloaded_layers(self) -> str:
+        try:  # private, for the report only: layers minus the ones kept loaded
+            layers = self.conductor._LayerOffloadConductor__layers
+            kept = self.conductor._LayerOffloadConductor__offload_strategy.initial_loaded_layers
+            return f"{len(layers) - len(kept)} of {len(layers)} layers offloaded"
+        except AttributeError:
+            return "offloaded layers unknown"
+
+    def close(self):
+        # as training does when a part leaves the train device: frees the caches and the pinned memory, which a
+        # dropped conductor kept registered (hipErrorInvalidValue in a later run)
+        if self.conductor is not None:
+            self.conductor.evict()
+            self.ctx.sync()
+            self.conductor = None
 
     def step(self) -> torch.Tensor:
         for lora in self.loras:
@@ -528,12 +550,14 @@ def _compare(ctx: Ctx, rec: Rec, family: Family, real: bool) -> None:
         counters.clear()
         offloaded = _Setup(ctx, family, real, compile_=True, offload=True)
         out_o, grads_o = offloaded.step(), offloaded.grads()
+        layers_text = offloaded.offloaded_layers()
         graphs = counters["stats"].get("unique_graphs", 0)
         breaks = sum(counters["graph_break"].values())
         out_err, grad_err = rel_err(out_o, out_e), rel_err(grads_o, grads_e)
-        judge(f"{label}, compiled with layer + activation offloading: output vs eager {out_err:.1e}, LoRA gradients "
-              f"{grad_err:.1e}; {graphs} graphs, {breaks} graph breaks", [out_o, grads_o], out_err, grad_err,
-              graphs, breaks, 0)
+        judge(f"{label}, compiled with layer + activation offloading ({layers_text}): output vs eager {out_err:.1e}, "
+              f"LoRA gradients {grad_err:.1e}; {graphs} graphs, {breaks} graph breaks", [out_o, grads_o], out_err,
+              grad_err, graphs, breaks, 0)
+        offloaded.close()
         del offloaded
         if ctx.is_gpu and rec.lines[-1].startswith("FAIL"):
             _offload_breakdown(ctx, rec, family, label, out_e, grads_e)
@@ -561,6 +585,7 @@ def _offload_breakdown(ctx: Ctx, rec: Rec, family: Family, label: str, out_e: to
             rec.line(f"  {label}, {name}: output {rel_err(out, out_e):.1e}, LoRA gradients "
                      f"{rel_err(grads, grads_e):.1e}; second step vs first {rel_err(second, out):.1e}, "
                      f"{rel_err(second_grads, grads):.1e}")
+            setup.close()
             del setup
         except Exception as e:
             rec.line(f"  {label}, {name}: {type(e).__name__}: {e}"[:400])
