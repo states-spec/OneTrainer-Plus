@@ -308,6 +308,15 @@ def stream_module_from_checkpoint(
         bar.close()
 
 
+def _strip_checkpoint_prefix(keys, checkpoint_prefix: str | None) -> dict[str, str] | None:
+    # {stripped key: checkpoint key} for the keys under checkpoint_prefix, the rest left out (e.g. a multimodal text
+    # encoder's vision tower, when only its language model is built); None when no key has the prefix, so a checkpoint
+    # saved without it (the language model alone) loads as it is
+    if not checkpoint_prefix or not any(key.startswith(checkpoint_prefix) for key in keys):
+        return None
+    return {key[len(checkpoint_prefix):]: key for key in keys if key.startswith(checkpoint_prefix)}
+
+
 class HFModelLoaderMixin(metaclass=ABCMeta):
     def __init__(self):
         super().__init__()
@@ -378,6 +387,7 @@ class HFModelLoaderMixin(metaclass=ABCMeta):
             model_filename: str,
             pytorch_model_filename: str | None,
             shard_index_filename: str,
+            checkpoint_prefix: str | None = None,
     ):
         if keep_in_fp32_modules is None:
             keep_in_fp32_modules = []
@@ -451,6 +461,10 @@ class HFModelLoaderMixin(metaclass=ABCMeta):
         else:
             for f in full_filenames:
                 state_dict |= load_file(f)
+
+        stripped = _strip_checkpoint_prefix(state_dict.keys(), checkpoint_prefix)
+        if stripped is not None:
+            state_dict = {key: state_dict[original] for key, original in stripped.items()}
 
         if hasattr(sub_module, '_fix_state_dict_keys_on_load'):
             sub_module._fix_state_dict_keys_on_load(state_dict)
@@ -535,7 +549,11 @@ class HFModelLoaderMixin(metaclass=ABCMeta):
             pretrained_model_name_or_path: str,
             subfolder: str = "",
             stream_from_disk: bool | None = None,
+            checkpoint_prefix: str | None = None,
     ):
+        # checkpoint_prefix: build module_type from the checkpoint keys under this prefix only (MOSS: the language model
+        # of a Qwen3.5 checkpoint saved as the multimodal Qwen3_5Model, "language_model."; its vision tower is never
+        # loaded). The config class reads its own part of a composite config (text_config) itself.
         self._validate_hf_repo_access(pretrained_model_name_or_path)
 
         # stream_from_disk None means the caller never streams this sub-module, and a bare module is returned.
@@ -570,6 +588,7 @@ class HFModelLoaderMixin(metaclass=ABCMeta):
                 model_filename="model.safetensors",
                 pytorch_model_filename="pytorch_model.bin",
                 shard_index_filename="model.safetensors.index.json",
+                checkpoint_prefix=checkpoint_prefix,
             )
             if stream_from_disk is None:
                 return sub_module
@@ -588,6 +607,10 @@ class HFModelLoaderMixin(metaclass=ABCMeta):
             model_filename="model.safetensors",
             shard_index_filename="model.safetensors.index.json",
         )
+        # stripped key -> the key the file stores, for the streamed reads
+        prefix_map = _strip_checkpoint_prefix(key_to_file.keys(), checkpoint_prefix)
+        if prefix_map is not None:
+            key_to_file = {key: key_to_file[original] for key, original in prefix_map.items()}
 
         # some checkpoints (e.g. Ernie's Mistral3, Qwen's Qwen2_5_VL text encoders) were saved with an older module
         # layout than transformers builds from the config now. Reuse transformers' own checkpoint conversion registry
@@ -607,8 +630,10 @@ class HFModelLoaderMixin(metaclass=ABCMeta):
                     key, weight_renamings, [], prefix=sub_module.base_model_prefix, meta_state_dict=meta_state_dict,
                 )[0]
                 renamed_key_to_file[renamed] = file
-                source_key_map[renamed] = key
+                source_key_map[renamed] = prefix_map[key] if prefix_map is not None else key
             key_to_file = renamed_key_to_file
+        elif prefix_map is not None:
+            source_key_map = prefix_map
 
         return self.__finish_sub_module_load(
             sub_module, dtype, train_dtype, keep_in_fp32_modules, key_to_file, source_key_map=source_key_map)
@@ -891,6 +916,7 @@ class HFModelLoaderMixin(metaclass=ABCMeta):
             base_model_name: str,
             subfolder: str,
             stream_from_disk: bool = False,
+            checkpoint_prefix: str | None = None,
     ):
         # text encoders have no single-file override and always load from their subfolder. Returns a
         # (text_encoder, materialize_fn) pair, materialize_fn None when not streamed, mirroring _load_transformer.
@@ -903,6 +929,7 @@ class HFModelLoaderMixin(metaclass=ABCMeta):
             base_model_name,
             subfolder,
             stream_from_disk=stream_from_disk,
+            checkpoint_prefix=checkpoint_prefix,
         )
 
     def _load_vae(

@@ -10,7 +10,8 @@ from modules.util.ModelNames import ModelNames
 from modules.util.ModelWeightDtypes import ModelWeightDtypes
 
 from diffusers import AutoencoderKLFlux2
-from transformers import Qwen2Tokenizer, Qwen3_5Model
+from transformers import Qwen2Tokenizer
+from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5TextModel
 
 
 class MossModelLoader(
@@ -59,13 +60,17 @@ class MossModelLoader(
             subfolder="scheduler",
         )
 
+        # only the language model of the multimodal Qwen3.5 checkpoint (Qwen3_5Model): MOSS never feeds it images, so
+        # its vision tower (~0.4B parameters) isn't built or loaded. The text-only model gives the same hidden states
+        # (bit-identical on a tiny random Qwen3.5); a text encoder OneTrainer saved has no prefix and loads as it is.
         model.text_encoder, model.materialize_fn["text_encoder"] = self._load_text_encoder(
-            Qwen3_5Model,
+            Qwen3_5TextModel,
             weight_dtypes.text_encoder,
             weight_dtypes.fallback_train_dtype,
             base_model_name,
             "text_encoder",
             stream_from_disk=stream_from_disk,
+            checkpoint_prefix="language_model.",
         )
 
         model.vae = self._load_vae(

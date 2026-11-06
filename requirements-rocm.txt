@@ -12,3 +12,12 @@ onnxruntime==1.23.2 # CPU build: the captioning and masking models only use the 
 # gfx950, gfx1100, gfx1101, gfx1150, gfx1151, gfx1200, gfx1201). It loads hipBLAS, hipSPARSE and hipBLASLt from a
 # system ROCm 7.2 install (/opt/rocm/lib). Without one, it logs a load error at startup and only its features fail.
 bitsandbytes==0.49.2; sys_platform == "linux"
+
+# MOSS's text encoder (Qwen3.5): Triton kernels for its linear-attention layers (24 of 32), which transformers uses
+# when a GPU is there; without them it runs a chunked PyTorch loop and text caching is slow. fla-core, not the
+# flash-linear-attention package: that one requires transformers >= 5.6.2 (requirements-global.txt pins 5.5.4) for
+# fla's own model classes, which OneTrainer doesn't use. No extra: fla-core[rocm]/[cuda] only add torch and Triton,
+# which come with the PyTorch build (an extra pulling PyPI's triton would replace ROCm's pytorch-triton-rocm).
+# Checked on the GPU by rocm_check ("Qwen3.5 linear attention").
+fla-core==0.6.0
+einops==0.8.2 # fla-core's only dependency

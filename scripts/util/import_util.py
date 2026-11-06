@@ -1,5 +1,6 @@
 def script_imports(allow_zluda: bool = True):
     import faulthandler
+    import importlib.util
     import logging
     import os
     import re
@@ -47,6 +48,14 @@ def script_imports(allow_zluda: bool = True):
                 r"`loss_type=.*` was set in the config but it is unrecognized", record.getMessage()
             )
         )
+
+        # Qwen3.5 (MOSS's text encoder) says its "fast path is not available" unless both fla-core and causal-conv1d
+        # are installed, but it takes each kernel separately: with fla-core, only the short convolution runs on
+        # PyTorch's conv1d (causal-conv1d is a CUDA extension). Without fla-core the message stays (slow fallback).
+        if importlib.util.find_spec("fla") is not None:
+            logging.getLogger("transformers.models.qwen3_5.modeling_qwen3_5").addFilter(
+                lambda record: 'The fast path is not available' not in record.getMessage()
+            )
 
         # A dependency still passes the deprecated local_dir_use_symlinks to hf_hub_download.
         warnings.filterwarnings("ignore", message=r".*local_dir_use_symlinks.*")

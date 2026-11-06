@@ -16,7 +16,8 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from diffusers import AutoencoderKLFlux2, DiffusionPipeline
-from transformers import Qwen2Tokenizer, Qwen3_5Model
+from transformers import Qwen2Tokenizer
+from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5TextModel
 
 # Maximum number of tokens for a chat-templated prompt (template overhead + user content).
 PROMPT_MAX_LENGTH = 4096
@@ -51,7 +52,7 @@ class MossModel(BaseModel):
     # base model data
     tokenizer: Qwen2Tokenizer | None
     noise_scheduler: MOSSImageScheduler | None
-    text_encoder: Qwen3_5Model | None
+    text_encoder: Qwen3_5TextModel | None  # the language model of Qwen3.5, without its vision tower
     vae: AutoencoderKLFlux2 | None
     transformer: MOSSImageTransformer | None
 

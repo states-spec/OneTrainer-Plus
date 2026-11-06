@@ -454,3 +454,71 @@ def stochastic_rounding(ctx: Ctx, rec: Rec):
     frac_up = (target == hi.to(ctx.device)).float().mean().item()
     rec.expect(values <= {lo.item(), hi.item()}, f"rounds only to the two neighbours ({sorted(values)})")
     rec.expect(abs(frac_up - 0.3) < 0.01, f"rounds up {frac_up:.3f} of the time (expected 0.300)")
+
+
+@check(SECTION, "Qwen3.5 linear attention: flash-linear-attention vs PyTorch (MOSS text encoder)", gpu_only=True,
+       note="the first run compiles fla's Triton kernels: a minute or two")
+def qwen35_linear_attention(ctx: Ctx, rec: Rec):
+    # 24 of Qwen3.5's 32 layers are Gated DeltaNet linear attention. transformers runs them with fla-core's Triton
+    # kernels when it is installed and a GPU is there, else with a chunked PyTorch loop (slow text caching for MOSS).
+    # The reference is that loop in float32 (it computes in float32 whatever its inputs are).
+    if importlib.util.find_spec("fla") is None:
+        rec.warn("fla-core isn't installed: MOSS's text encoder runs its linear attention on the PyTorch fallback "
+                 "(correct, but slow text caching). It comes with requirements-rocm.txt / requirements-cuda.txt.")
+        return
+    from transformers.models.qwen3_5 import modeling_qwen3_5 as qwen
+    from transformers.utils.import_utils import is_flash_linear_attention_available
+
+    from fla.modules import FusedRMSNormGated
+    from fla.ops.gated_delta_rule import chunk_gated_delta_rule
+
+    rec.line(f"transformers uses fla here: {is_flash_linear_attention_available()} (needs a GPU)")
+    heads, dim = 32, 128  # Qwen3.5-9B: 16 key heads repeated to 32 value heads, head size 128
+    for batch, length in [(1, 333), (2, 1024)]:  # one caption at a time (caching), and a longer padded batch
+        gen = ctx.generator(batch * 1000 + length)
+        q, k, v = (torch.randn(batch, length, heads, dim, generator=gen) for _ in range(3))
+        a = torch.randn(batch, length, heads, generator=gen)
+        beta = torch.randn(batch, length, heads, generator=gen).sigmoid()
+        a_log, dt_bias = torch.rand(heads, generator=gen).mul(16).log(), torch.ones(heads)
+        g = -a_log.exp() * F.softplus(a + dt_bias)  # as Qwen3_5GatedDeltaNet computes it
+        inputs = [t.to(ctx.device) for t in (q, k, v, g, beta)]
+        ref, _ = qwen.torch_chunk_gated_delta_rule(*inputs, use_qk_l2norm_in_kernel=True)
+        for dtype in (torch.float32, torch.bfloat16):
+            # g (log decay) stays float32, as in the model
+            cast = [t.to(dtype) for t in inputs[:3]] + [inputs[3], inputs[4].to(dtype)]
+            out, _ = chunk_gated_delta_rule(*cast, use_qk_l2norm_in_kernel=True)
+            torch_out, _ = qwen.torch_chunk_gated_delta_rule(*cast, use_qk_l2norm_in_kernel=True)
+            err, torch_err = rel_err(out.float(), ref), rel_err(torch_out.float(), ref)
+            label = f"B={batch} T={length} {DTYPE_NAME[dtype]}"
+            if not finite(out):
+                rec.fail(f"{label}: fla output not finite")
+                continue
+            # fla in bf16 has to be about as close as the PyTorch loop given the same bf16 inputs
+            limit = 1e-3 if dtype == torch.float32 else max(2 * torch_err, TOL[dtype])
+            rec.line(f"{label}: fla {err:.1e}, PyTorch fallback {torch_err:.1e} (vs the float32 PyTorch result)")
+            rec.expect(err < limit, f"{label}: fla within {limit:.1e}")
+        bf16 = [t.to(torch.bfloat16) for t in inputs[:3]] + [inputs[3], inputs[4].to(torch.bfloat16)]
+        fla_ms = ctx.bench(lambda bf16=bf16: chunk_gated_delta_rule(*bf16, use_qk_l2norm_in_kernel=True))
+        torch_ms = ctx.bench(lambda bf16=bf16: qwen.torch_chunk_gated_delta_rule(*bf16, use_qk_l2norm_in_kernel=True))
+        rec.line(f"B={batch} T={length} bf16, one layer: fla {fla_ms:.2f} ms, PyTorch fallback {torch_ms:.2f} ms "
+                 f"({torch_ms / max(fla_ms, 1e-9):.1f}x)")
+        rec.metric(f"fla_speedup_B{batch}_T{length}", torch_ms / max(fla_ms, 1e-9))
+
+    # the gated output norm transformers takes from fla too
+    gen = ctx.generator(7)
+    x, z = torch.randn(4096, dim, generator=gen), torch.randn(4096, dim, generator=gen)
+    weight = torch.rand(dim, generator=gen) + 0.5
+    for dtype in (torch.float32, torch.bfloat16):
+        ours = qwen.Qwen3_5RMSNormGated(dim, eps=1e-6).to(ctx.device, dtype)
+        theirs = FusedRMSNormGated(dim, eps=1e-6, activation="silu", device=ctx.device, dtype=dtype)
+        with torch.no_grad():
+            ours.weight.copy_(weight)
+            theirs.weight.copy_(weight)
+            xd, zd = x.to(ctx.device, dtype), z.to(ctx.device, dtype)
+            ref = qwen.Qwen3_5RMSNormGated(dim, eps=1e-6).to(ctx.device)
+            ref.weight.copy_(weight)
+            expected = ref(xd.float(), zd.float())
+            err, torch_err = rel_err(theirs(xd, zd).float(), expected), rel_err(ours(xd, zd).float(), expected)
+        limit = 1e-5 if dtype == torch.float32 else max(2 * torch_err, TOL[dtype])
+        rec.line(f"gated RMS norm {DTYPE_NAME[dtype]}: fla {err:.1e}, PyTorch {torch_err:.1e}")
+        rec.expect(err < limit, f"gated RMS norm {DTYPE_NAME[dtype]}: fla within {limit:.1e}")
