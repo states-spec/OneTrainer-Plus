@@ -126,6 +126,7 @@ def path_entry(
         required: bool = False,
         columnspan: int = 1,
         placeholder: str = "",
+        initial_dir: Callable[[], str] | None = None,
 ):
     frame = ctk.CTkFrame(master, fg_color="transparent")
     frame.grid(row=row, column=column, padx=0, pady=0, sticky="new", columnspan=columnspan)
@@ -168,6 +169,8 @@ def path_entry(
             elif mode == "dir":
                 current_dir = str(current_path.parent)
                 current_filename = None
+        elif initial_dir is not None:
+            current_dir = initial_dir() or None
 
         if mode == "dir":
             chosen = filedialog.askdirectory(initialdir=current_dir)

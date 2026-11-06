@@ -86,7 +86,7 @@ class CloudTrainer(BaseTrainer):
         self.sync_thread = threading.Thread(target=sync)
         self.sync_thread.start()
 
-        if self.config.continue_last_backup:
+        if self.config.continue_last_backup and not self.config.continue_backup_path:
             print('warning: backups are not uploaded, but expected to be on the cloud already!')
 
     def train(self):
@@ -164,6 +164,8 @@ class CloudTrainer(BaseTrainer):
         adjust(remote.transformer,"model_name", if_exists=True)
         adjust(remote,"final_output_dir")
         adjust(remote,"lora_model_name")
+        # a selected local backup is uploaded (BaseCloud.upload_config); "cloud:<path>" names one on the cloud machine
+        adjust(remote,"continue_backup_path")
 
         adjust(remote.embedding,"model_name")
         for add_embedding in remote.additional_embeddings:

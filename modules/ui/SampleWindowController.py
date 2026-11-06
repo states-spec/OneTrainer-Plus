@@ -67,8 +67,8 @@ class SampleWindowController:
         )
 
         model_names = self.initial_train_config.model_names()
-        if self.initial_train_config.continue_last_backup:
-            last_backup_path = self.initial_train_config.get_last_backup_path()
+        if self.initial_train_config.continue_backup_path or self.initial_train_config.continue_last_backup:
+            last_backup_path = self.initial_train_config.get_resume_backup_path()
 
             if last_backup_path:
                 if self.initial_train_config.training_method == TrainingMethod.LORA:

@@ -458,6 +458,7 @@ class TrainConfig(BaseConfig):
     validate_after: float
     validate_after_unit: TimeUnit
     continue_last_backup: bool
+    continue_backup_path: str
     prevent_overwrites: bool
     auto_correct_input: bool
     run_name_mode: RunNameMode
@@ -1168,6 +1169,33 @@ class TrainConfig(BaseConfig):
             return backup_path
         return None
 
+    def check_selected_backup(self):
+        # Continue From Backup names one backup on purpose, so one that can't be resumed stops the run (Continue From
+        # Last Backup skips such folders and takes the next one instead)
+        path = self.continue_backup_path
+        if not path:
+            return
+        if not os.path.isdir(path):
+            raise ValueError(f"Continue From Backup: {path!r} isn't a folder (relative paths start at {os.getcwd()}). "
+                             f"Choose a backup folder in <workspace>/backup, or clear the field.")
+        if not os.path.isfile(os.path.join(path, "meta.json")):
+            raise ValueError(f"Continue From Backup: {path!r} isn't a finished backup (it has no meta.json, which a "
+                             f"backup writes last). Choose a backup folder in <workspace>/backup, or clear the field.")
+        mismatch = self._backup_mismatch(self._backup_settings(path))
+        if mismatch:
+            raise ValueError(f"Continue From Backup: {path!r} was made with {mismatch}. Choose a backup of this "
+                             f"model type and training method, or clear the field.")
+
+    def get_resume_backup_path(self) -> str | None:
+        # the backup a run continues from: the selected one (Continue From Backup) wins over the newest one
+        # (Continue From Last Backup); None to start without a backup
+        if self.continue_backup_path:
+            self.check_selected_backup()
+            return self.continue_backup_path
+        if self.continue_last_backup:
+            return self.get_last_backup_path()
+        return None
+
     @staticmethod
     def _backup_settings(backup_path: str) -> dict:
         # the config the backup was made with (GenericTrainer.__save_backup_config); empty for backups without it
@@ -1262,6 +1290,7 @@ class TrainConfig(BaseConfig):
         data.append(("validate_after", 1, int, False))
         data.append(("validate_after_unit", TimeUnit.EPOCH, TimeUnit, False))
         data.append(("continue_last_backup", False, bool, False))
+        data.append(("continue_backup_path", "", str, False))
         data.append(("prevent_overwrites", False, bool, False))
         data.append(("auto_correct_input", True, bool, False))
         data.append(("run_name_mode", RunNameMode.DEFAULT, RunNameMode, False))

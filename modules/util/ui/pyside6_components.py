@@ -261,6 +261,7 @@ def path_entry(
         required: bool = False,
         columnspan: int = 1,
         placeholder: str = "",
+        initial_dir: Callable[[], str] | None = None,
 ) -> QWidget:
     frame = QWidget(master)
     frame_lo = QGridLayout(frame)
@@ -310,6 +311,8 @@ def path_entry(
                 current_filename = str(current_path.name)
             elif mode == "dir":
                 current_dir = str(current_path.parent)
+        elif initial_dir is not None:
+            current_dir = initial_dir()
 
         if mode == "dir":
             chosen = QFileDialog.getExistingDirectory(frame, "", current_dir, file_dialog_options(QFileDialog.Option.ShowDirsOnly))
