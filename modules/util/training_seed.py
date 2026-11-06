@@ -70,13 +70,12 @@ def apply_training_seed(config):
     env_seed = os.environ.get("OT_SEED", "").strip()
     if env_seed:
         config.training_seed = int(env_seed)
-        print(f"OT_SEED: the training seed for this run is {config.training_seed}")
     check_training_seed(config)
 
     random.seed(config.training_seed)
     np.random.seed(config.training_seed)  # noqa: NPY002 (the legacy global generator is the one other code draws from)
     torch.manual_seed(config.training_seed)
-    print(f"Training seed: {config.training_seed} ({str(config.training_seed_mode).capitalize()})")
+    # not printed (user decision): the seed a run used is in its saved config, <workspace>/config/<run name>.json
 
 
 def training_seed_offset(config) -> int:

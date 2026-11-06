@@ -71,6 +71,15 @@ def _train(ctx: Ctx, run_dir: str, config: dict, env: dict[str, str], values: li
             "samples": os.path.join(run_dir, "workspace", "samples")}
 
 
+def _saved_training_seed(run_dir: str) -> int | None:
+    # GenericTrainer.start saves the run's config (with the seed it trains with) to <workspace>/config/<run name>.json
+    try:
+        with open(os.path.join(run_dir, "workspace", "config", "lora.json"), encoding="utf-8") as f:
+            return int(json.load(f)["training_seed"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
 def _weights(path: str) -> dict[str, torch.Tensor]:
     from safetensors.torch import load_file
     return {k: v.double() for k, v in load_file(path).items()}
@@ -478,10 +487,11 @@ def training_seed(ctx: Ctx, rec: Rec):
         # OT_SEED replaces the config's seed for the whole run: the same run as that seed, not a mix of the two
         env_seed = run("ot_seed_7_over_3", "FIXED", 3, {"OT_SEED": "7"})
         randomized = run("random", "RANDOM", 0)
-        match = re.search(r"Training seed: (\d+) \(Random\)", randomized["log"])
-        repeat = run("random_repeated", "FIXED", int(match.group(1))) if match else None
-        if match is None and randomized["weights"] is not None:
-            rec.fail("the Random run didn't print its seed")
+        # the seed isn't printed: the run's config, saved in the workspace when training starts, holds it
+        random_seed = _saved_training_seed(os.path.join(base_dir, "random"))
+        repeat = run("random_repeated", "FIXED", random_seed) if random_seed is not None else None
+        if random_seed is None and randomized["weights"] is not None:
+            rec.fail("the Random run's saved config has no training seed")
         # the same start for two seeds: a run at learning rate 0 saves it
         start = run("initial_lora", "FIXED", 7, extra={"learning_rate": 0, "epochs": 1})
         same_start = {"lora_model_name": start["output"]}
@@ -513,8 +523,8 @@ def training_seed(ctx: Ctx, rec: Rec):
             # torch's CPU generator reads only the low 32 bits of a seed: the seed's part has to be in them
             compare("Fixed 7 vs Fixed 8 from the same saved LoRA (noise, timesteps, rounding)", from_start_7,
                     from_start_8, False)
-        if match:
-            compare(f"Random (seed {match.group(1)}) vs Fixed {match.group(1)}", randomized, repeat, True)
+        if random_seed is not None:
+            compare(f"Random (seed {random_seed}) vs Fixed {random_seed}", randomized, repeat, True)
     finally:
         if failed:
             rec.line(f"the runs are kept in {base_dir} (each run's .log and .jsonl)")
