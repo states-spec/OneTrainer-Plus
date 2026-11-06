@@ -146,24 +146,36 @@ class BaseTrainUIView(ABC):
                          tooltip="The directory where cached data is saved")
         self.components.path_entry(frame, 0, 3, ui_state, "cache_dir", mode="dir", io_type=PathIOType.OUTPUT)
 
-        # continue from a backup chosen by the user (wins over the last backup)
-        self.components.label(frame, 1, 0, "Continue from Backup",
+        # continue from a backup chosen by the user, or from the last backup: one at a time, the other is greyed out
+        backup_label = self.components.label(frame, 1, 0, "Continue from Backup",
                          tooltip="Continues training from this backup folder (in <workspace>/backup, named "
                                  "<run>-backup-<step>-<epoch>-<epoch step>), however old it is: its weights, optimizer "
-                                 "state and progress. Overrides \"Continue from last backup\". Used for one run: the "
-                                 "field is cleared once training has started from it, so a later restart with "
-                                 "\"Continue from last backup\" picks up the new run's backups.",
+                                 "state and progress. While a backup is selected, \"Continue from last backup\" is "
+                                 "greyed out and not used; clear the field to use it again.",
                          wide_tooltip=True)
-        self.components.path_entry(frame, 1, 1, ui_state, "continue_backup_path", mode="dir",
-                                   io_type=PathIOType.INPUT, columnspan=3,
+        backup_entry = self.components.path_entry(frame, 1, 1, ui_state, "continue_backup_path", mode="dir",
+                                   io_type=PathIOType.INPUT,
                                    extra_validate=_validate_backup_folder,
-                                   initial_dir=lambda: self.__backup_dir(ui_state),
-                                   placeholder="empty: start fresh, or from the last backup if that is on")
+                                   initial_dir=lambda: self.__backup_dir(ui_state))
 
         # continue from previous backup
-        self.components.label(frame, 2, 0, "Continue from last backup",
-                         tooltip="Automatically continues training from the last backup saved in <workspace>/backup")
-        self.components.switch(frame, 2, 1, ui_state, "continue_last_backup")
+        last_backup_label = self.components.label(frame, 2, 0, "Continue from last backup",
+                         tooltip="Automatically continues training from the last backup saved in <workspace>/backup. "
+                                 "While it is on, \"Continue from Backup\" is greyed out and not used.")
+        last_backup_switch = self.components.switch(frame, 2, 1, ui_state, "continue_last_backup")
+
+        def update_backup_choice(*args):
+            # a config with both set (written by hand) resumes the selected backup, so the switch is the one greyed out
+            selected = bool(str(ui_state.get_var("continue_backup_path").get()).strip())
+            last = str(ui_state.get_var("continue_last_backup").get()).lower() in ("true", "1")
+            for widget in (backup_label, backup_entry):
+                self.components.set_widget_enabled(widget, selected or not last)
+            for widget in (last_backup_label, last_backup_switch):
+                self.components.set_widget_enabled(widget, not selected)
+
+        self.components.bind_var_trace(backup_entry, ui_state, "continue_backup_path", update_backup_choice)
+        self.components.bind_var_trace(last_backup_switch, ui_state, "continue_last_backup", update_backup_choice)
+        update_backup_choice()
 
         # only cache
         self.components.label(frame, 2, 2, "Only Cache",

@@ -323,9 +323,6 @@ class TrainUIController:
 
         if seed_used:
             self.view.schedule_on_main_thread(self.__advance_training_seed)
-            if self.train_config.continue_backup_path:
-                # Continue From Backup is for one run: kept, a restart after a crash would go back to the same backup
-                self.view.schedule_on_main_thread(lambda: self.view.ui_state.get_var("continue_backup_path").set(""))
 
         # queue UI update on Tk main thread; on_training_stopped applies shared styles, avoid potential race/crash
         self.view.schedule_on_main_thread(lambda: self.view.on_training_stopped(error_caught))
