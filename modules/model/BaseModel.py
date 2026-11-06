@@ -94,6 +94,13 @@ class BaseModelEmbedding:
         else:
             self.vector.requires_grad_(requires_grad)
 
+    def append_embed_token(self, caption: str | None, device, dtype) -> torch.Tensor | None:
+        if self.vector is None:
+            return None
+        if caption is not None and self.placeholder not in caption:
+            return None
+        return self.vector.to(device=device, dtype=dtype)
+
 
 def _log_vram(device: torch.device, when: str):
     # OT_LOG_VRAM=true prints the GPU memory use at every model part swap (sampling, caching, backups), to find the

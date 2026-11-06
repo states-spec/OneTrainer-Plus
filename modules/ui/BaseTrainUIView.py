@@ -396,10 +396,11 @@ class BaseTrainUIView(ABC):
                          tooltip="The placeholder used when using the embedding in a prompt")
         inputs.append(self.components.entry(frame, 4, 1, ui_state, "embedding.placeholder"))
 
-        # output embedding
-        self.components.label(frame, 5, 0, "Output embedding",
-                         tooltip="Output embeddings are calculated at the output of the text encoder, not the input. This can improve results for larger text encoders and lower VRAM usage.")
-        inputs.append(self.components.switch(frame, 5, 1, ui_state, "embedding.is_output_embedding"))
+        # output embedding (hidden for models without an output embedding, e.g. MOSS)
+        if self._should_show_output_embedding_toggle():
+            self.components.label(frame, 5, 0, "Output embedding",
+                             tooltip="Output embeddings are calculated at the output of the text encoder, not the input. This can improve results for larger text encoders and lower VRAM usage.")
+            inputs.append(self.components.switch(frame, 5, 1, ui_state, "embedding.is_output_embedding"))
 
         if not in_use:
             for component in inputs:

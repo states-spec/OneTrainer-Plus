@@ -291,6 +291,9 @@ class PySide6TrainView(BaseTrainUIView, QMainWindow, metaclass=QtABCMeta):
         self.build_tools_tab_content(frame, self.controller, self.ui_state)
         pyside6_components._pack_form(frame)
 
+    def _should_show_output_embedding_toggle(self) -> bool:
+        return not self.controller.train_config.model_type.is_moss()
+
     def _configure_embedding_frame(self, frame):
         self.build_embedding_tab_content(frame, self.controller, self.ui_state)
         pyside6_components._pack_form(frame)
@@ -399,6 +402,9 @@ class PySide6TrainView(BaseTrainUIView, QMainWindow, metaclass=QtABCMeta):
             self.lora_tab.refresh_ui()
         if 'embedding' in self._tab_widgets:
             self._refresh_embedding_tab()
+        if self.additional_embeddings_tab:
+            # rebuilt, so each entry's output embedding switch is shown or hidden for the new model type (MOSS)
+            self.additional_embeddings_tab.refresh_ui()
         self._update_additional_embeddings_tab(model_type)
 
     def _update_additional_embeddings_tab(self, model_type: ModelType):
