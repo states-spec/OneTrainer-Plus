@@ -342,6 +342,26 @@ def _krea2(real: bool):
     return model, inputs
 
 
+def _moss(real: bool):
+    # OneTrainer's copy of the MOSS-Image transformer (no diffusers class yet). Batch 2 with texts of two lengths: the
+    # whole batch goes through each block at once with the padded text masked (MOSSImageTransformer.forward), which
+    # is what layer offloading needs
+    from modules.model.moss.pipeline_moss_image import MOSSImageTransformer
+    if real:  # MOSS-Image-Base's widths, two blocks
+        model = MOSSImageTransformer(dim=3072, ffn_dim=8192, num_heads=24, num_layers=2, text_dim=4096)
+        grid, text, text_dim = 32, 64, 4096
+    else:
+        model = MOSSImageTransformer(dim=64, ffn_dim=128, num_heads=4, num_layers=3, text_dim=32, freq_dim=32)
+        grid, text, text_dim = 3, 6, 32
+
+    def inputs(g):
+        mask = torch.ones(2, text, dtype=torch.bool)
+        mask[1, -2:] = False
+        return {"hidden_states": _randn((2, 128, grid, grid), g), "timestep": torch.tensor([300.0, 700.0]),
+                "encoder_hidden_states": _randn((2, text, text_dim), g), "encoder_attention_mask": mask}
+    return model, inputs
+
+
 @dataclass(frozen=True)
 class Family:
     name: str
@@ -372,6 +392,7 @@ FAMILIES = [
     Family("Ernie Image", _ernie, "enable_checkpointing_for_ernie_transformer", "transformer", has_real=False),
     Family("Ideogram 4", _ideogram, "enable_checkpointing_for_ideogram_transformer", "transformer", has_real=False),
     Family("Krea 2", _krea2, "enable_checkpointing_for_krea2_transformer", "transformer", has_real=False),
+    Family("MOSS", _moss, "enable_checkpointing_for_moss_transformer", "transformer"),
 ]
 
 

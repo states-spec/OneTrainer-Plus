@@ -8,6 +8,7 @@ from modules.util.convert_util import (
     lora_fold_alpha,
 )
 from modules.util.enum.ModelFormat import ModelFormat
+from modules.util.enum.TrainingMethod import TrainingMethod
 
 from torch import Tensor
 
@@ -44,6 +45,12 @@ def kohya_flatten(
     return out_states
 
 
+def _may_bundle_embeddings(model, text_encoders: list) -> bool:
+    # bundled embeddings come with a text encoder LoRA, or with a model that trains embeddings without one: MOSS
+    # appends its embeddings to the text encoder's output and has no text encoder LoRA
+    return bool(text_encoders) or TrainingMethod.EMBEDDING in model.model_type.supported_training_methods()
+
+
 def lora_kohya_conversion(model) -> list:
     # canonical -> KOHYA conversion list (feeds _convert_kohya, before kohya_flatten), derived from the model.
     # The denoising model is the universal lora_unet (kohya-ss's LORA_PREFIX_UNET regardless of architecture)
@@ -57,7 +64,7 @@ def lora_kohya_conversion(model) -> list:
     text_encoders = model.lora_text_encoders()
     extra = [(te_names[ModelFormat.DIFFUSERS_LORA], te_names[ModelFormat.KOHYA_LORA])
              for _te_module, te_names in text_encoders]
-    if text_encoders:
+    if _may_bundle_embeddings(model, text_encoders):
         extra.append(("bundle_emb", "bundle_emb"))
     return component_body_conversion(canonical, "lora_unet", conversion, extra)
 
@@ -77,7 +84,7 @@ def lora_original_conversion(model, conversion) -> list:
     # name to rename to; this entry only lets the strict convert carry the TE keys through.
     extra = [(te_names[ModelFormat.DIFFUSERS_LORA], te_names[ModelFormat.DIFFUSERS_LORA])
              for _te_module, te_names in text_encoders]
-    if text_encoders:
+    if _may_bundle_embeddings(model, text_encoders):
         extra.append(("bundle_emb", "bundle_emb"))
     return component_body_conversion(canonical, canonical, conversion, extra)
 

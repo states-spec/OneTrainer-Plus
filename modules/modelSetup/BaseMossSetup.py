@@ -14,6 +14,7 @@ from modules.util.checkpointing_util import (
     enable_checkpointing_for_moss_transformer,
 )
 from modules.util.config.TrainConfig import TrainConfig, TrainEmbeddingConfig
+from modules.util.training_seed import training_seed_offset
 from modules.util.TrainProgress import TrainProgress
 
 import torch
@@ -46,7 +47,8 @@ class BaseMossSetup(
         self._setup_model_part(model, config, "text_encoder", config.text_encoder, enable_checkpointing_for_moss_encoder_layers, disable_fp16_autocast=True)
         self._setup_model_part(model, config, "vae", config.vae)
 
-        self._set_attention_backend(model.transformer, config.attention_mechanism, mask=False)
+        # a batch whose texts differ in length passes a mask (MOSSImageTransformer.forward), so FLASH gets the warning
+        self._set_attention_backend(model.transformer, config.attention_mechanism, mask=True)
 
     def predict(
             self,
@@ -58,7 +60,7 @@ class BaseMossSetup(
             deterministic: bool = False,
     ) -> dict:
         with model.autocast_context:
-            batch_seed = 0 if deterministic else train_progress.global_step * multi.world_size() + multi.rank()
+            batch_seed = 0 if deterministic else train_progress.global_step * multi.world_size() + multi.rank() + training_seed_offset(config)
             generator = torch.Generator(device=config.train_device)
             generator.manual_seed(batch_seed)
             rand = Random(batch_seed)
@@ -73,6 +75,11 @@ class BaseMossSetup(
                 text_encoder_dropout_probability=config.text_encoder.dropout_probability if not deterministic else None,
                 caption_texts=batch.get('prompt'),
             )
+
+            if config.cep_gamma > 0 and not deterministic:
+                text_encoder_output = self._apply_conditional_embedding_perturbation(
+                    text_encoder_output, config.cep_gamma, generator
+                )
 
             latent_image = batch['latent_image']
             scaled_latent_image = model.scale_latents(latent_image)
@@ -94,6 +101,11 @@ class BaseMossSetup(
                 timestep,
                 model.noise_scheduler.timesteps,
             )
+
+            if not deterministic:
+                scaled_noisy_latent_image, latent_noise = self._apply_ciop(
+                    scaled_noisy_latent_image, latent_noise, config, generator, rand
+                )
 
             latent_input = scaled_noisy_latent_image
 
@@ -237,7 +249,8 @@ class BaseMossSetup(
             model.append_tokens[embedding.uuid].requires_grad_(train_embedding)
 
     def prepare_text_caching(self, model: MossModel, config: TrainConfig):
-        if not config.train_text_encoder_or_embedding():
-            model.materialize_only("text_encoder")
+        # the text is always cached (MossBaseDataLoader): the text encoder is never trained, and the embeddings are
+        # appended to its output, after the cache
+        model.materialize_only("text_encoder")
 
         model.eval()

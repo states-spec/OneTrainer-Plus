@@ -245,6 +245,9 @@ OneTrainer+ is built on the work of many people. Numbers such as #992 are pull r
     -   Koratahiu: DoRA-OFT (#1335) and the `adv_optm` features (#1344)
     -   Hameer Abbasi and Koratahiu: the dependency update to Pillow 13 and `adv_optm` 2.6.0, with scaled weight decay
         and SinkSGD's OFT mode (#1756)
+-   **MOSS-Image** (experimental branch `koratahiu-moss-implementation-experimental` only): Koratahiu's MOSS-Image
+    support (#1741, still open upstream), with its transformer and pipeline code adapted from the
+    [OpenMOSS-Team/MOSS-Image-Base](https://huggingface.co/OpenMOSS-Team/MOSS-Image-Base) repository.
 
 ## License
 

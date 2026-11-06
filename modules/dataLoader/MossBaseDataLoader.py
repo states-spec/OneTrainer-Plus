@@ -96,12 +96,13 @@ class MossBaseDataLoader(
         if config.masked_training or config.model_type.has_mask_input():
             modules.append(downscale_mask)
 
-        modules.append(tokenize_prompt)
+        # MOSS never trains its text encoder (the UI hides the switch), and its embeddings are appended to the text
+        # encoder's output (MossModel.encode_text), so the text is always encoded here, as for Krea 2: with a leftover
+        # text_encoder.train or embedding training, predict re-encoded every step with the text encoder off the train
+        # device
+        modules += [tokenize_prompt, encode_prompt]
 
-        if not config.train_text_encoder_or_embedding():
-            modules.append(encode_prompt)
-
-        if config.latent_caching and not config.train_text_encoder_or_embedding():
+        if config.latent_caching:
             modules.append(prune_masked_tokens)
 
         return modules
@@ -121,8 +122,7 @@ class MossBaseDataLoader(
             'concept'
         ]
 
-        if not config.train_text_encoder_or_embedding():
-            text_split_names += ['tokens', 'tokens_mask', 'text_encoder_hidden_state']
+        text_split_names += ['tokens', 'tokens_mask', 'text_encoder_hidden_state']
 
         return self._cache_modules_from_names(
             model, model_setup,
@@ -131,7 +131,7 @@ class MossBaseDataLoader(
             text_split_names=text_split_names,
             sort_names=sort_names,
             config=config,
-            text_caching=not config.train_text_encoder_or_embedding(),
+            text_caching=True,
         )
 
     def _output_modules(self, config: TrainConfig, model: MossModel, model_setup: BaseMossSetup):
@@ -148,8 +148,7 @@ class MossBaseDataLoader(
         if config.masked_training or config.model_type.has_mask_input():
             output_names.append('latent_mask')
 
-        if not config.train_text_encoder_or_embedding():
-            output_names.append('text_encoder_hidden_state')
+        output_names.append('text_encoder_hidden_state')
 
         output_module_list = self._output_modules_from_out_names(
             model, model_setup,
@@ -161,8 +160,9 @@ class MossBaseDataLoader(
             train_dtype=model.train_dtype,
         )
 
-        if config.latent_caching and not config.train_text_encoder_or_embedding():
-            output_module_list = [pad_masked_tokens] + output_module_list
+        # always padded: the text is tokenized unpadded, so without latent caching the samples of a batch had texts of
+        # different lengths
+        output_module_list = [pad_masked_tokens] + output_module_list
 
         return output_module_list
 

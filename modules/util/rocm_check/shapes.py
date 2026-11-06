@@ -29,6 +29,8 @@ FAMILIES = [
     Family("SD3/SD3.5 Medium MMDiT", 24, 64, 1536, 6144, lambda r: (r // 16) ** 2, 333),
     Family("Flux/Chroma/Qwen-Image MMDiT", 24, 128, 3072, 12288, lambda r: (r // 16) ** 2, 512),
     Family("Z-Image DiT", 30, 128, 3840, 10240, lambda r: (r // 16) ** 2, 256),
+    # the fused up/gate projection is the widest (2 x 8192); the text is a chat-templated prompt
+    Family("MOSS-Image DiT", 24, 128, 3072, 16384, lambda r: (r // 16) ** 2, 256),
 ]
 
 HEAD_DIMS = sorted({f.head_dim for f in FAMILIES})

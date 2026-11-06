@@ -181,14 +181,24 @@ class MossModel(BaseModel):
                 captions = caption_texts if caption_texts is not None else [None] * len(pruned_hidden_states)
                 new_states = []
                 new_lengths = []
+                appended = set()
                 for i, h in enumerate(pruned_hidden_states):
                     caption = captions[i] if i < len(captions) else None
                     for emb in active_embeddings:
                         append = emb.append_embed_token(caption, train_device, text_encoder_output.dtype)
                         if append is not None:
                             h = torch.cat([h, append], dim=0)
+                            appended.add(emb.uuid)
                     new_states.append(h)
                     new_lengths.append(h.shape[0])
+                # a trained embedding reaches the loss only through the samples whose caption has its placeholder. In a
+                # batch without any, embedding training had no gradient path and backward() raised; a zero term keeps
+                # it in the graph with a zero gradient, as the other models' unused embeddings get
+                unused = [emb.vector for emb in active_embeddings
+                          if emb.uuid not in appended and emb.vector is not None and emb.vector.requires_grad]
+                if unused and torch.is_grad_enabled():
+                    zero = sum(vector.sum() for vector in unused) * 0.0
+                    new_states[0] = new_states[0] + zero.to(new_states[0].dtype)
                 pruned_hidden_states = new_states
                 seq_lengths = torch.tensor(new_lengths, device=train_device, dtype=seq_lengths.dtype)
 

@@ -226,7 +226,9 @@ class BaseTrainingTabView(ABC):
 
     def __setup_moss_ui(self, column_0, column_1, column_2, controller, ui_state):
         self.__create_base_frame(column_0, 0, controller, ui_state)
-        self.__create_text_encoder_frame(column_0, 1, ui_state, supports_clip_skip=False, supports_training=False)
+        # no caption dropout: MossModel.encode_text doesn't implement it (GenericTrainer.start refuses it)
+        self.__create_text_encoder_frame(column_0, 1, ui_state, supports_clip_skip=False, supports_training=False,
+                                         supports_dropout=False)
         self.__create_embedding_frame(column_0, 2, ui_state)
 
         self.__create_base2_frame(column_1, 0, controller, ui_state)

@@ -125,6 +125,12 @@ class GenericTrainer(BaseTrainer):
         if self.config.compile and self.config.model_type.is_hi_dream():
             raise ValueError("Compile transformer blocks doesn't work with HiDream: its mixture-of-experts layers choose "
                              "experts from the data, which torch.compile can't trace. Turn it off on the model tab.")
+        # MossModel.encode_text raises NotImplementedError for caption dropout, at the first step after caching
+        if self.config.model_type.is_moss() and self.config.text_encoder.dropout_probability > 0:
+            raise ValueError("MOSS doesn't support text encoder caption dropout, and this config has "
+                             f"{self.config.text_encoder.dropout_probability} from another model type. Set "
+                             "text_encoder.dropout_probability to 0 (the training tab shows it for the other model "
+                             "types; on the command line: --config-value text_encoder.dropout_probability=0).")
         self.__check_device_support()
         create.check_optimizer_config(self.config.optimizer)
         check_training_seed(self.config)

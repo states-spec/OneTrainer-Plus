@@ -109,7 +109,7 @@ def _rotate(x, rope):
     return x * cos + torch.cat((-b, a), -1) * sin
 
 
-def _attention(q, k, v, rope, heads, backend=None):
+def _attention(q, k, v, rope, heads, backend=None, key_mask=None):
     # q, k, v arrive as [B, S, dim]; reshape to the packed [B, S, H, hd] layout and apply RoPE.
     shape = (*q.shape[:2], heads, q.shape[-1] // heads)
     q = _rotate(q.reshape(shape), rope)
@@ -118,7 +118,8 @@ def _attention(q, k, v, rope, heads, backend=None):
     q, k, v = q.to(v.dtype), k.to(v.dtype), v
     # dispatch_attention_fn takes the packed [B, S, H, hd] layout (as the diffusers processors
     # pass it) and handles the flash/flex/sdpa layout conversion and kernel selection internally.
-    out = dispatch_attention_fn(q, k, v, backend=backend)
+    # key_mask ([B, S] bool, OneTrainer): the padded text tokens of a batch whose texts differ in length
+    out = dispatch_attention_fn(q, k, v, attn_mask=key_mask, backend=backend)
     return out.flatten(2)
 
 
@@ -134,12 +135,12 @@ class _TextBlock(nn.Module):
         self.ffn_gate, self.ffn_up = nn.Linear(dim, ffn_dim), nn.Linear(dim, ffn_dim)
         self.ffn_down = nn.Linear(ffn_dim, dim)
 
-    def forward(self, x, rope):
+    def forward(self, x, rope, key_mask=None):
         dtype = x.dtype
         q, k, v = self.qkv(self.norm1(x)).to(dtype).chunk(3, -1)
         q = self.q_norm(q.unflatten(-1, (self.heads, -1))).flatten(2)
         k = self.k_norm(k.unflatten(-1, (self.heads, -1))).flatten(2)
-        x = x + self.proj(_attention(q, k, v, rope, self.heads, self.attention_backend)).to(dtype)
+        x = x + self.proj(_attention(q, k, v, rope, self.heads, self.attention_backend, key_mask)).to(dtype)
         y = self.norm2(x)
         return x + self.ffn_down(_situ(self.ffn_up(y), self.ffn_gate(y))).to(dtype)
 
@@ -150,10 +151,10 @@ class _TextProjection(nn.Module):
         self.proj = nn.Linear(text_dim, dim)
         self.blocks = nn.ModuleList([_TextBlock(dim, ffn_dim, heads) for _ in range(2)])
 
-    def forward(self, x, rope):
+    def forward(self, x, rope, key_mask=None):
         x = self.proj(x.to(x.dtype)).to(x.dtype)
         for block in self.blocks:
-            x = block(x, rope)
+            x = block(x, rope, key_mask)
         return x
 
 
@@ -170,7 +171,7 @@ class _Block(nn.Module):
         self.proj['ffn_up_gate'] = nn.Linear(dim, 2 * ffn_dim, bias=False)
         self.proj['ffn_down'] = nn.Linear(ffn_dim, dim, bias=False)
 
-    def forward(self, x, rope, modulation):
+    def forward(self, x, rope, modulation, key_mask=None):
         shift_a, scale_a, gate_a, shift_f, scale_f, gate_f = modulation.unbind(1)
         y = self.norm1(x) * (1 + scale_a[:, None]) + shift_a[:, None]
         dtype = x.dtype
@@ -178,7 +179,7 @@ class _Block(nn.Module):
         q = self.q_norm(self.proj['q'](y).to(dtype).unflatten(-1, (self.heads, -1))).flatten(2)
         k = self.k_norm(self.proj['k'](y).to(dtype).unflatten(-1, (self.heads, -1))).flatten(2)
         v = self.proj['v'](y).to(dtype)
-        x = x + self.proj['o'](_attention(q, k, v, rope, self.heads, self.attention_backend)).to(dtype) * gate_a[:, None]
+        x = x + self.proj['o'](_attention(q, k, v, rope, self.heads, self.attention_backend, key_mask)).to(dtype) * gate_a[:, None]
         y = self.norm2(x) * (1 + scale_f[:, None]) + shift_f[:, None]
         hidden, gate = self.proj['ffn_up_gate'](y.to(dtype)).to(dtype).chunk(2, -1)
         return x + self.proj['ffn_down'](_situ(hidden, gate)).to(dtype) * gate_f[:, None]
@@ -332,26 +333,53 @@ class MOSSImageTransformer(ModelMixin, ConfigMixin):
         time = self.time_embedding(embedding.to(_input_dtype(self.time_embedding[0]))).float()
         mod = self.shared_block_modulation(time.to(_input_dtype(self.shared_block_modulation))).view(batch, 6, -1)
         head = self.video_head_modulation(time.to(_input_dtype(self.video_head_modulation))).view(batch, 2, -1)
-        outputs = []
-        for index in range(batch):
-            context = encoder_hidden_states[index:index + 1, mask[index].bool()]
-            if context.shape[1] == 0:
-                raise ValueError('Each sample needs at least one valid text token.')
-            video = hidden_states[index:index + 1].flatten(2).transpose(1, 2)
-            video = self.video_embedder(video.to(_input_dtype(self.video_embedder)).contiguous())
-            # Match the reference activation dtype under fp32 weights + autocast.
-            rope = self.rope(height, width, context.shape[1], hidden_states.device).to(video.dtype)
-            text = self.text_embedder(context, rope[:, height * width:])
-            x = torch.cat((video, text), 1)
-            for layer_index, layer in enumerate(self.layers):
-                if layer_index not in skip_layers:
-                    x = layer(x, rope, mod[index:index + 1])
-            x = self.final_norm_video(x[:, :height * width].to(_input_dtype(self.final_norm_video)))
-            x = x * (1 + head[index:index + 1, 1, None]) + head[index:index + 1, 0, None]
-            x = self.final_linear_video(x.to(_input_dtype(self.final_linear_video)))
-            outputs.append(x.transpose(1, 2).reshape(1, -1, height, width))
-        sample = torch.cat(outputs)
+        # OneTrainer: the whole batch goes through each block at once (the reference ran one sample at a time, so
+        # layer offloading, which expects each block once per pass, computed wrong results for a batch above 1,
+        # sampling with CFG included). Each sample keeps its true text length: the valid tokens are moved to the
+        # front, the shorter texts padded, and the padding masked out of every attention as keys. Without padding
+        # (batch 1, or texts of one length) no mask is passed.
+        mask = mask.bool()
+        lengths = mask.sum(1)
+        if bool((lengths == 0).any()):
+            raise ValueError('Each sample needs at least one valid text token.')
+        text_length = int(lengths.max())
+        if bool(mask[:, :text_length].all()) and not bool(mask[:, text_length:].any()):
+            context = encoder_hidden_states[:, :text_length]
+            text_mask = None
+        else:
+            context = torch.nn.utils.rnn.pad_sequence(
+                [encoder_hidden_states[index, mask[index]] for index in range(batch)], batch_first=True)
+            text_mask = torch.arange(text_length, device=mask.device)[None] < lengths[:, None]
+        video = hidden_states.flatten(2).transpose(1, 2)
+        video = self.video_embedder(video.to(_input_dtype(self.video_embedder)).contiguous())
+        # Match the reference activation dtype under fp32 weights + autocast.
+        rope = self._batch_rope(height, width, lengths.tolist(), text_length, hidden_states.device).to(video.dtype)
+        text = self.text_embedder(context, rope[:, height * width:], text_mask)
+        x = torch.cat((video, text), 1)
+        key_mask = None
+        if text_mask is not None:
+            key_mask = torch.cat((torch.ones(batch, height * width, dtype=torch.bool, device=mask.device), text_mask), 1)
+        for layer_index, layer in enumerate(self.layers):
+            if layer_index not in skip_layers:
+                x = layer(x, rope, mod, key_mask)
+        x = self.final_norm_video(x[:, :height * width].to(_input_dtype(self.final_norm_video)))
+        x = x * (1 + head[:, 1, None]) + head[:, 0, None]
+        x = self.final_linear_video(x.to(_input_dtype(self.final_linear_video)))
+        # contiguous, as the reference's torch.cat made it (a view here: the loss then sums in another order)
+        sample = x.transpose(1, 2).reshape(batch, -1, height, width).contiguous()
         return Transformer2DModelOutput(sample=sample) if return_dict else (sample,)
+
+    def _batch_rope(self, height, width, lengths, text_length, device):
+        # each sample's RoPE depends on its own text length (the image tokens' second coordinate); a padded text
+        # position gets 0, which only masked keys and discarded queries see
+        ropes = {}
+        out = []
+        for length in lengths:
+            if length not in ropes:
+                rope = self.rope(height, width, length, device)
+                ropes[length] = torch.nn.functional.pad(rope, (0, 0, 0, text_length - length))
+            out.append(ropes[length])
+        return out[0] if len(out) == 1 else torch.cat(out)
 
 
 class MOSSImageScheduler(FlowMatchEulerDiscreteScheduler):
