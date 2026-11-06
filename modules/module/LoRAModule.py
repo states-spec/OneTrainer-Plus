@@ -597,6 +597,7 @@ class OFTModule(PeftBase):
     block_share: bool
     oft_scaled: bool
     oft_cans: bool
+    oft_cans_fp32: bool
     oft_clipped_norm: float | None
     dropout_probability: float
     adjustment_info: tuple[int, int] | None # for reporting
@@ -608,6 +609,7 @@ class OFTModule(PeftBase):
         self.block_share = block_share
         self.oft_scaled = oft_scaled
         self.oft_cans = kwargs.pop('oft_cans', False)
+        self.oft_cans_fp32 = kwargs.pop('oft_cans_fp32', False)
         self.oft_clipped_norm = oft_clipped_norm
         self.dropout_probability = kwargs.pop('dropout_probability', 0.0)
         self.oft_R = None
@@ -678,6 +680,7 @@ class OFTModule(PeftBase):
             use_cayley_neumann=True,
             dropout_probability=self.dropout_probability,
             oft_cans=self.oft_cans,
+            oft_cans_fp32=self.oft_cans_fp32,
             oft_clipped_norm=self.oft_clipped_norm,
         )
 
@@ -973,6 +976,7 @@ class LoRAModuleWrapper:
             self.additional_kwargs = {
                 'dropout_probability': config.dropout_probability,
                 'oft_cans': config.oft_cans,
+                'oft_cans_fp32': config.oft_cans_fp32,
             }
         elif self.peft_type == PeftType.LOKR:
             self.klass = LoKrModule

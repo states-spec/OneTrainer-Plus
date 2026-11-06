@@ -293,6 +293,8 @@ def _feature_variants() -> list[tuple[str, dict, list[str], dict]]:
         ("OFT with DoRA-OFT, CANS and spectral norm clipping",
          {"peft_type": "OFT_2", "dora_oft": True, "oft_cans": True, "oft_clipped_norm": 0.5, "oft_block_size": 8},
          [], {"round_trip": True}),
+        ("OFT with CANS in float32", {"peft_type": "OFT_2", "oft_cans": True, "oft_cans_fp32": True, "oft_block_size": 8},
+         [], {"round_trip": True}),
         ("LoRA with a bundled additional embedding", {"additional_embeddings": [_EMBEDDING]}, [],
          {**emb, "round_trip": True}),
         # adv_optm's OFT mode only on the OFT group: the embedding's group would fail in the first step with it
@@ -535,6 +537,9 @@ def _compiled_variants(ctx: Ctx) -> list[tuple[str, dict, list[str]]]:
         # CANS didn't compile in 20 minutes before its coefficients became an opaque op (oft_utils.cans_coefficients)
         ("OFT with DoRA-OFT, CANS and spectral norm clipping",
          {"peft_type": "OFT_2", "dora_oft": True, "oft_cans": True, "oft_clipped_norm": 0.5, "oft_block_size": 8}, []),
+        # its rotation is built with autocast switched off inside the compiled block
+        ("OFT with CANS in float32", {"peft_type": "OFT_2", "oft_cans": True, "oft_cans_fp32": True,
+                                      "oft_clipped_norm": 0.5, "oft_block_size": 8}, []),
         ("float8 transformer weights", {}, ["transformer.weight_dtype=FLOAT_8"]),
     ]
     if ctx.is_gpu:  # its backward is a Triton kernel: no CPU training
@@ -568,12 +573,12 @@ def compiled_training(ctx: Ctx, rec: Rec):
         env = {"TORCH_LOGS": "recompiles,graph_breaks",
                "TORCHINDUCTOR_CACHE_DIR": os.path.join(base_dir, "torchinductor")}
 
-        def run(name: str, changes: dict, values: list[str]) -> dict:
+        def run(name: str, changes: dict, values: list[str], extra_env: dict | None = None) -> dict:
             run_dir = os.path.join(base_dir, re.sub(r"[^a-z0-9]+", "_", name.lower()))
             os.makedirs(run_dir, exist_ok=True)
             config = _base_config(ctx, model, data, run_dir, 2)
             config.update(json.loads(json.dumps(changes)))
-            result = _train(ctx, run_dir, config, env, values, "diag")
+            result = _train(ctx, run_dir, config, {**env, **(extra_env or {})}, values, "diag")
             with open(os.path.join(run_dir, "diag.log"), encoding="utf-8", errors="replace") as f:
                 result["log"] = f.read()
             return result
@@ -592,9 +597,17 @@ def compiled_training(ctx: Ctx, rec: Rec):
                 return None
             return w
 
-        def step_ms(r: dict) -> float:
+        def summary(r: dict) -> dict:
             from modules.util.diag_report import load, summarize
-            return (summarize(load(r["diag"])).get("step s median") or 0) * 1000 if os.path.exists(r["diag"]) else 0
+            return summarize(load(r["diag"])) if os.path.exists(r["diag"]) else {}
+
+        def step_ms(r: dict) -> float:
+            return (summary(r).get("step s median") or 0) * 1000
+
+        def peak(r: dict) -> str:
+            # the peak GPU memory the run reserved (GPU only: the CPU records none)
+            s = summary(r)
+            return f"{s['peak reserved GiB'] * 1024:.0f}" if "peak reserved GiB" in s else "?"
 
         for name, changes, values in _compiled_variants(ctx):
             eager = run(f"{name} eager", changes, values)
@@ -613,7 +626,8 @@ def compiled_training(ctx: Ctx, rec: Rec):
                 if first is not None else float("inf")
             text = (f"{name}: compiled vs eager: first loss {first_diff:.1e}, weights {diff:.1e}; {graphs} compiled "
                     f"variants, {breaks} graph breaks; {compiled['seconds']:.0f} s vs {eager['seconds']:.0f} s, "
-                    f"step {step_ms(compiled):.0f} vs {step_ms(eager):.0f} ms")
+                    f"step {step_ms(compiled):.0f} vs {step_ms(eager):.0f} ms"
+                    + (f", peak reserved {peak(compiled)} vs {peak(eager)} MiB" if ctx.is_gpu else ""))
             rec.metric(f"{name}: compiled run seconds", compiled["seconds"])
             if graphs == 0 or breaks or first_diff > 2e-2 or diff > 0.3:
                 failed = True
@@ -638,6 +652,23 @@ def compiled_training(ctx: Ctx, rec: Rec):
                     else:
                         rec.warn(f"{text}: compiled runs don't repeat bit-exactly here, so compare runs with Compile "
                                  f"set the same way and expect rounding-level differences between them")
+
+                # inductor's deterministic mode skips the on-device benchmarking that picks kernel configs by speed
+                # (and can pick another reduction order next time): do two such runs repeat, and what does it cost?
+                deterministic = {"TORCHINDUCTOR_DETERMINISTIC": "1"}
+                first_det = run("LoRA compiled deterministic", {}, ["compile=true"], deterministic)
+                second_det = run("LoRA compiled deterministic again", {}, ["compile=true"], deterministic)
+                w_first_det = finished("LoRA, compiled with TORCHINDUCTOR_DETERMINISTIC=1", first_det)
+                w_second_det = finished("LoRA, compiled with TORCHINDUCTOR_DETERMINISTIC=1 again", second_det)
+                if w_first_det is not None and w_second_det is not None:
+                    repeat = _weights_diff(w_first_det, w_second_det)
+                    text = (f"LoRA compiled with TORCHINDUCTOR_DETERMINISTIC=1, twice: weights {repeat:.1e} apart, "
+                            f"vs eager {_weights_diff(w_eager, w_second_det):.1e}; step {step_ms(second_det):.0f} ms vs "
+                            f"{step_ms(again):.0f} ms without it")
+                    if repeat == 0:
+                        rec.line(f"ok: {text} (bit-identical)")
+                    else:
+                        rec.warn(f"{text}: inductor's deterministic mode doesn't make compiled runs repeat here")
     finally:
         if failed:
             rec.line(f"the runs are kept in {base_dir} (each run's diag.log and diag.jsonl)")

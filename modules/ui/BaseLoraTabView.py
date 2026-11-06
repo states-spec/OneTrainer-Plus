@@ -102,6 +102,25 @@ class BaseLoraTabView:
                                   tooltip="Computes the exact Cayley rotation with a Chebyshev-accelerated Newton-Schulz iteration (CANS) instead of the default 5-term series, which drifts from an orthogonal matrix at larger rotations. Off by default: PEFT, the reference implementation of this format, applies the 5-term series, so use this only if your inference applies the exact transform. Same file format; the extra cost is small next to the layer itself.")
             self.components.switch(master, 3, 4, ui_state, "oft_cans")
 
+            # CANS precision
+            cans_fp32_label = self.components.label(
+                master, 5, 3, "CANS in Float32", wide_tooltip=True,
+                tooltip="Builds the CANS rotation in float32 even when training in bfloat16 or float16 (only with "
+                        "Exact Rotation). Off, its matrix products run in the training data type, which keeps the "
+                        "rotation about 5e-3 from orthogonal under bfloat16, close to the 5-term series at small "
+                        "rotations; on, it is exact to about 1e-7. The products are block size x block size, so the "
+                        "extra cost is small next to the layer. Changes the results compared with runs made without it; "
+                        "same file format.")
+            cans_fp32_switch = self.components.switch(master, 5, 4, ui_state, "oft_cans_fp32")
+
+            def update_cans_fp32(*_):
+                enabled = bool(ui_state.get_var("oft_cans").get())
+                for widget in (cans_fp32_label, cans_fp32_switch):
+                    self.components.set_widget_enabled(widget, enabled)
+
+            self.components.bind_var_trace(cans_fp32_label, ui_state, "oft_cans", update_cans_fp32)
+            update_cans_fp32()
+
             # Clip OFT max norm
             self.components.label(master, 5, 0, "Spectral Norm Clipping",
                                   tooltip="Limits the spectral norm of the OFT matrix using a power iteration estimate. Start at 0.95 for longer runs. Lower values limit adaptation; keep below 1 for stability. Leave blank to disable (default). The file gets one extra clipped_oft value per layer: inference has to apply the same clipping, or the rotation differs once the limit is reached.")

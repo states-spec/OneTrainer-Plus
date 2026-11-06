@@ -100,10 +100,14 @@ results up to the check that was running (the report names it). The exit code is
    With `--full`, Compile transformer blocks is also trained against the same run without it, in a fresh compile
    cache: the workload LoRA (and the same compiled run again, from the cache the first one filled), layer and
    activation offloading, no gradient checkpointing, DoRA, LoKr with DoRA, OFT with CANS, DoRA-OFT and norm
-   clipping, float8 and (on a GPU) int W8A8 weights. Compiling changes the rounding, so the two are compared by
+   clipping, the same in float32 (CANS in Float32), float8 and (on a GPU) int W8A8 weights. Compiling changes the rounding, so the two are compared by
    size: the first step's loss (the same weights, so only the forward pass can differ) and the trained weights,
    which must stay far closer than two seeds; a graph break, or nothing compiled, fails. The report line gives
-   each pair's compiled variants and run and step times.
+   each pair's compiled variants, run and step times and (on a GPU) peak memory. Two more compiled runs use
+   `TORCHINDUCTOR_DETERMINISTIC=1` (PyTorch's switch that skips inductor's on-device benchmarking of kernel
+   configs): on an RX 7900 XTX two ordinary compiled runs ended 2.1e-3 apart, so this shows whether that mode makes
+   them repeat exactly, and at what speed. The adapters check also compares OFT's exact rotation (CANS) built in
+   the training data type and in float32 (CANS in Float32): orthogonality and, with `--full`, speed.
    When a run fails, the folder with every run is kept (the report names it), each with its whole output in
    `diag.log`. A run that crashes in native code (ROCm aborts the process on a GPU fault or a failed assert in a
    kernel: exit code -6) shows the runtime's message and where its threads were in the report line.

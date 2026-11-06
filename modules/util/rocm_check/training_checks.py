@@ -40,6 +40,9 @@ def _adapter_factories(device: torch.device):
         # the check's weights give a rotation norm of ~0.2, so a limit of 0.05 keeps the clipping active
         "OFT v2 clipped": lambda lin, dev: OFTModule("p", lin, 32, False, False, oft_clipped_norm=0.05,
                                                      dropout_probability=0.0),
+        "OFT v2 CANS": lambda lin, dev: OFTModule("p", lin, 32, False, False, dropout_probability=0.0, oft_cans=True),
+        "OFT v2 CANS in float32": lambda lin, dev: OFTModule("p", lin, 32, False, False, dropout_probability=0.0,
+                                                             oft_cans=True, oft_cans_fp32=True),
     }
 
 
@@ -86,6 +89,19 @@ def adapters(ctx: Ctx, rec: Rec):
         rec.expect(ok and err_y < tol and err_g < tol * 2,
                    f"{name}: out rel err {err_y:.1e}, grads {err_g:.1e} (limits {tol:.0e}/{tol * 2:.0e}, "
                    f"{'bf16 autocast' if on_gpu else 'fp32'} vs fp32 CPU)")
+
+    # the CANS rotation itself under the autocast training uses: in the training dtype its products and bounds are
+    # bf16, with CANS in Float32 they aren't (orthogonality error ||R R^T - I|| per block, scaled by the block size)
+    factories = _adapter_factories(ctx.device)
+    for name in ("OFT v2 CANS", "OFT v2 CANS in float32"):
+        _, adapter = _build_adapter(ctx, factories[name], ctx.device, in_f, out_f, torch.bfloat16 if on_gpu else torch.float32)
+        rotation = adapter.oft_R
+        with torch.no_grad(), torch.autocast(ctx.device.type, dtype=torch.bfloat16):
+            R = rotation._cayley_batch(rotation.weight, rotation.block_size, True, True).double()
+        eye = torch.eye(R.shape[-1], dtype=R.dtype, device=R.device)
+        orthogonality = ((R @ R.mT - eye).norm(dim=(1, 2)) / R.shape[-1] ** 0.5).mean().item()
+        rec.line(f"{name}: rotation orthogonality error {orthogonality:.1e} under bf16 autocast")
+        rec.metric(f"{name}: orthogonality error", orthogonality)
 
     if ctx.full and on_gpu:
         in_f = out_f = 3072

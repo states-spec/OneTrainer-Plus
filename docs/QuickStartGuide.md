@@ -106,6 +106,11 @@ one setting shows its own effect instead of being mixed with a different random 
 - Random: one new seed for every run, drawn once and written into the Seed field before the run starts; the whole run
   comes from that one seed. To repeat a run you liked, switch to Fixed with that seed.
 
+Compile transformer blocks (model tab) changes the rounding, so keep it the same in runs you compare. On a GPU, two
+compiled runs with the same seed also end slightly apart (2.1e-3 on an RX 7900 XTX, where two seeds are about 0.8 apart),
+because PyTorch picks its compiled kernels by timing them; `TORCHINDUCTOR_DETERMINISTIC=1` skips that timing (see
+[LAUNCH-SCRIPTS.md](../LAUNCH-SCRIPTS.md) for how to check whether it makes compiled runs repeat exactly on your GPU).
+
 The seed a run used is printed when it starts ("Training seed: ...") and saved with the run's config in the workspace
 (`workspace/config/<run name>.json`). The data order and augmentations follow each concept's own seed (concepts tab),
 and validation keeps its own fixed seed. From the command line, Increment and Decrement can't change the config file, so

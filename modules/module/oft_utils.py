@@ -93,6 +93,7 @@ class OFTRotationModule(nn.Module):
         dropout_probability=0.0,
         oft_cans=False,
         oft_clipped_norm: float | None = None,
+        oft_cans_fp32=False,
     ):
         super().__init__()
         self.r = r
@@ -109,6 +110,8 @@ class OFTRotationModule(nn.Module):
         self.oft_scaled = oft_scaled
         self.use_cayley_neumann = use_cayley_neumann
         self.oft_cans = oft_cans
+        # with CANS: build the rotation in float32 even under bf16/fp16 autocast (see _cayley_batch)
+        self.oft_cans_fp32 = oft_cans_fp32
         # Create indices for upper triangle (excluding diagonal)
         rows, cols = torch.triu_indices(block_size, block_size, 1)
         self.register_buffer("rows", rows, persistent=False)
@@ -187,6 +190,18 @@ class OFTRotationModule(nn.Module):
         """
         Perform the Cayley parametrization on a batch of skew-symmetric matrices.
         """
+        if (oft_cans or not use_cayley_neumann) and self.oft_cans_fp32:
+            # Under bf16 (or fp16) autocast every matrix product of the rotation - the clipping's power iteration,
+            # (I + Q)^2 and each CANS step - runs in that dtype, and so do the CANS bounds, which keeps the rotation
+            # ~5e-3 from orthogonal. In float32 it is exact to ~1e-7; the products are block_size x block_size, small
+            # next to the layer. Without autocast and with float32 OFT weights it computes the same as without the option.
+            with torch.autocast(Q.device.type, enabled=False):
+                return self._cayley_batch_impl(Q.float(), block_size, use_cayley_neumann, oft_cans).to(Q.dtype)
+        return self._cayley_batch_impl(Q, block_size, use_cayley_neumann, oft_cans)
+
+    def _cayley_batch_impl(
+        self, Q: torch.Tensor, block_size: int, use_cayley_neumann: bool, oft_cans: bool,
+    ) -> torch.Tensor:
         b, _ = Q.shape
         previous_dtype = Q.dtype
 
