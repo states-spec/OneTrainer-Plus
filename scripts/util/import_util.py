@@ -94,6 +94,12 @@ def script_imports(allow_zluda: bool = True):
         except OSError:
             pass  # an unwritable home: PyTorch's own default
 
+    # torch.compile picks some kernel configs by timing them on the GPU, so two compiled runs with the same seed ended
+    # slightly apart (2.3e-3 on the tiny Chroma, RX 7900 XTX). Deterministic mode skips that timing: there compiled
+    # runs repeated bit-exactly at the same speed (tiny Chroma 13 vs 13 ms per step; Anima LoRA 0.362 vs 0.361 s, same
+    # memory). Read when torch._inductor.config is imported; TORCHINDUCTOR_DETERMINISTIC=0 turns it off.
+    os.environ.setdefault("TORCHINDUCTOR_DETERMINISTIC", "1")
+
     if allow_zluda and sys.platform.startswith('win'):
         from modules.zluda import ZLUDAInstaller
 

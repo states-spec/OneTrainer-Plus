@@ -106,10 +106,10 @@ one setting shows its own effect instead of being mixed with a different random 
 - Random: one new seed for every run, drawn once and written into the Seed field before the run starts; the whole run
   comes from that one seed. To repeat a run you liked, switch to Fixed with that seed.
 
-Compile transformer blocks (model tab) changes the rounding, so keep it the same in runs you compare. On a GPU, two
-compiled runs with the same seed also end slightly apart (2.1e-3 on an RX 7900 XTX, where two seeds are about 0.8 apart),
-because PyTorch picks its compiled kernels by timing them; with `TORCHINDUCTOR_DETERMINISTIC=1` (see
-[LAUNCH-SCRIPTS.md](../LAUNCH-SCRIPTS.md)) it skips that timing, and compiled runs repeated bit-exactly there.
+Compile transformer blocks (model tab) changes the rounding, so keep it the same in runs you compare. Compiled runs
+with the same seed repeat bit-exactly too, because OneTrainer+ sets `TORCHINDUCTOR_DETERMINISTIC=1` (see
+[LAUNCH-SCRIPTS.md](../LAUNCH-SCRIPTS.md)); with it set to `0`, PyTorch picks its compiled kernels by timing them on
+the GPU, and two runs ended slightly apart (2.3e-3 on an RX 7900 XTX, where two seeds are about 0.8 apart).
 
 The seed a run used is printed when it starts ("Training seed: ...") and saved with the run's config in the workspace
 (`workspace/config/<run name>.json`). The data order and augmentations follow each concept's own seed (concepts tab),

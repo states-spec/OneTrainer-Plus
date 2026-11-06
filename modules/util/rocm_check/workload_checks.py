@@ -651,26 +651,27 @@ def compiled_training(ctx: Ctx, rec: Rec):
                             f"{compiled['seconds']:.0f} s cold, weights vs the first compiled run {repeat:.1e}")
                     if repeat == 0:
                         rec.line(f"ok: {text} (bit-identical)")
+                    elif os.environ.get("TORCHINDUCTOR_DETERMINISTIC") == "1":
+                        rec.warn(f"{text}: inductor's deterministic mode (on by default) doesn't make compiled runs "
+                                 f"repeat here, so expect rounding-level differences between compiled runs")
                     else:
-                        rec.warn(f"{text}: compiled runs don't repeat bit-exactly here, so compare runs with Compile "
-                                 f"set the same way and expect rounding-level differences between them")
+                        rec.warn(f"{text}: TORCHINDUCTOR_DETERMINISTIC="
+                                 f"{os.environ.get('TORCHINDUCTOR_DETERMINISTIC')!r} here turns off the deterministic "
+                                 f"mode that makes compiled runs repeat")
 
-                # inductor's deterministic mode skips the on-device benchmarking that picks kernel configs by speed
-                # (and can pick another reduction order next time): do two such runs repeat, and what does it cost?
-                deterministic = {"TORCHINDUCTOR_DETERMINISTIC": "1"}
-                first_det = run("LoRA compiled deterministic", {}, ["compile=true"], deterministic)
-                second_det = run("LoRA compiled deterministic again", {}, ["compile=true"], deterministic)
-                w_first_det = finished("LoRA, compiled with TORCHINDUCTOR_DETERMINISTIC=1", first_det)
-                w_second_det = finished("LoRA, compiled with TORCHINDUCTOR_DETERMINISTIC=1 again", second_det)
-                if w_first_det is not None and w_second_det is not None:
-                    repeat = _weights_diff(w_first_det, w_second_det)
-                    text = (f"LoRA compiled with TORCHINDUCTOR_DETERMINISTIC=1, twice: weights {repeat:.1e} apart, "
-                            f"vs eager {_weights_diff(w_eager, w_second_det):.1e}; step {step_ms(second_det):.0f} ms vs "
-                            f"{step_ms(again):.0f} ms without it")
-                    if repeat == 0:
-                        rec.line(f"ok: {text} (bit-identical)")
-                    else:
-                        rec.warn(f"{text}: inductor's deterministic mode doesn't make compiled runs repeat here")
+                # without inductor's deterministic mode (OneTrainer+ turns it on, script_imports), inductor picks kernel
+                # configs by timing them on the device and can pick another reduction order next time: how far apart
+                # do two such runs end, and what does the deterministic mode cost?
+                timed = {"TORCHINDUCTOR_DETERMINISTIC": "0"}
+                first_timed = run("LoRA compiled without deterministic mode", {}, ["compile=true"], timed)
+                second_timed = run("LoRA compiled without deterministic mode again", {}, ["compile=true"], timed)
+                w_first_timed = finished("LoRA, compiled with TORCHINDUCTOR_DETERMINISTIC=0", first_timed)
+                w_second_timed = finished("LoRA, compiled with TORCHINDUCTOR_DETERMINISTIC=0 again", second_timed)
+                if w_first_timed is not None and w_second_timed is not None:
+                    repeat = _weights_diff(w_first_timed, w_second_timed)
+                    rec.line(f"info: LoRA compiled with TORCHINDUCTOR_DETERMINISTIC=0, twice: weights {repeat:.1e} "
+                             f"apart, vs eager {_weights_diff(w_eager, w_second_timed):.1e}; step "
+                             f"{step_ms(second_timed):.0f} ms vs {step_ms(again):.0f} ms with the deterministic mode")
     finally:
         if failed:
             rec.line(f"the runs are kept in {base_dir} (each run's diag.log and diag.jsonl)")
