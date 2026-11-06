@@ -71,6 +71,27 @@ def __get_args_indices(fun: Callable, arg_names: list[str]) -> list[int]:
     return indices
 
 
+def _contiguous(values):
+    # A compiled block's input gradient came out wrong when an input was a non-contiguous view: SD 1.5's
+    # Transformer2DModel feeds its blocks hidden_states.permute(0, 2, 3, 1).reshape(...) after the conv proj_in,
+    # and with a LoRA on the self-attention the gradient leaving the compiled block was 3-5% off the eager one
+    # (torch 2.13, CPU; the LoRA's own gradients were right, every layer before the block learned from the wrong
+    # one). A .contiguous() inside the compiled region doesn't help, inductor drops it; this runs before it, and
+    # is a no-op for the contiguous inputs every other model passes.
+    if isinstance(values, dict):
+        return {k: v.contiguous() if isinstance(v, torch.Tensor) else v for k, v in values.items()}
+    return tuple(v.contiguous() if isinstance(v, torch.Tensor) else v for v in values)
+
+
+def _compile_with_contiguous_inputs(layer: nn.Module):
+    layer.compile(fullgraph=True)
+    compiled = layer._compiled_call_impl
+
+    def call(*args, **kwargs):
+        return compiled(*_contiguous(args), **_contiguous(kwargs))
+    layer._compiled_call_impl = call
+
+
 class BaseCheckpointLayer(torch.nn.Module):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -180,6 +201,7 @@ class BoundaryOffloadCheckpointLayer(BaseCheckpointLayer):
         # checkpoint as a higher-order op and the min-cut partitioner prunes the recompute to what the
         # backward needs. With the checkpoint outside the compiled region the backward re-runs the whole
         # block. Traceable at all only because no conductor call happens in here.
+        self.compiled = compile
         self.run_block = torch.compile(self.__checkpointed_block, fullgraph=True) if compile else self.__checkpointed_block
 
     def __deepcopy__(self, memo):
@@ -230,6 +252,8 @@ class BoundaryOffloadCheckpointLayer(BaseCheckpointLayer):
 
     def forward(self, *args, **kwargs):
         args, extra_kwargs = _kwargs_to_args(self.orig_forward if self.checkpoint is None else self.checkpoint.forward, args, kwargs)
+        if self.compiled:  # see _contiguous
+            args, extra_kwargs = _contiguous(args), _contiguous(extra_kwargs)
         if any(isinstance(value, torch.Tensor) and value.requires_grad for value in extra_kwargs.values()):
             # the boundaries wrap the positional tensors only, so a gradient through a keyword argument would bypass them
             raise NotImplementedError(f"offloading can't pass a tensor that requires grad by keyword: {list(extra_kwargs)}")
@@ -310,7 +334,7 @@ def create_checkpoint(
         if compile:
             layer = CheckpointLayer(orig_module=orig_module, orig_forward=None, checkpointing=checkpointing)
             #do compile the checkpointing layer - slightly faster
-            layer.compile(fullgraph=True)
+            _compile_with_contiguous_inputs(layer)
             return layer
         else:
             layer = CheckpointLayer(orig_module=None, orig_forward=orig_module.forward, checkpointing=checkpointing)

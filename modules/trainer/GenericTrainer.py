@@ -120,6 +120,11 @@ class GenericTrainer(BaseTrainer):
         if self.config.training_method == TrainingMethod.LORA and self.config.peft_type == PeftType.OFT_2 \
                 and self.config.oft_clipped_norm is not None and self.config.oft_clipped_norm <= 0:
             raise ValueError("oft_clipped_norm must be greater than 0. Leave it empty to turn spectral norm clipping off.")
+        # HiDream's mixture-of-experts layers pick their experts by the data (boolean indexing in training, a
+        # .cpu().numpy() loop at sampling), which a fullgraph compile can't trace: the first step failed in inductor
+        if self.config.compile and self.config.model_type.is_hi_dream():
+            raise ValueError("Compile transformer blocks doesn't work with HiDream: its mixture-of-experts layers choose "
+                             "experts from the data, which torch.compile can't trace. Turn it off on the model tab.")
         self.__check_device_support()
         create.check_optimizer_config(self.config.optimizer)
         check_training_seed(self.config)

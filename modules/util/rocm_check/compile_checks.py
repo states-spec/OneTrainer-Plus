@@ -240,16 +240,14 @@ def _hidream(real: bool):
                                                num_single_layers=2, attention_head_dim=128, num_attention_heads=20,
                                                caption_channels=[4096, 4096], text_emb_dim=2048, num_routed_experts=4,
                                                num_activated_experts=2, axes_dims_rope=(64, 32, 32),
-                                               max_resolution=(128, 128), llama_layers=(0, 1),
-                                               force_inference_output=True)
+                                               max_resolution=(128, 128), llama_layers=(0, 1))
         size, t5, llama, pooled, tokens = 64, 4096, 4096, 2048, 128
     else:
         model = HiDreamImageTransformer2DModel(patch_size=2, in_channels=4, out_channels=4, num_layers=1,
                                                num_single_layers=1, attention_head_dim=8, num_attention_heads=4,
                                                caption_channels=[8, 4], text_emb_dim=8, num_routed_experts=2,
                                                num_activated_experts=2, axes_dims_rope=(4, 2, 2),
-                                               max_resolution=(32, 32), llama_layers=(0, 1),
-                                               force_inference_output=True)
+                                               max_resolution=(32, 32), llama_layers=(0, 1))
         size, t5, llama, pooled, tokens = 32, 8, 4, 8, 8
     return model, lambda g: {"hidden_states": _randn((1, 16 if real else 4, size, size), g),
                              "timesteps": torch.tensor([500]),
@@ -351,6 +349,7 @@ class Family:
     enable: str  # the checkpointing_util function training uses for this family
     part: str  # the TrainConfig part holding its settings
     has_real: bool = True  # a config at the family's real width exists (not for the newest families yet)
+    refused: str = ""  # why GenericTrainer refuses Compile for this family; its run is expected to fail
 
 
 FAMILIES = [
@@ -367,7 +366,8 @@ FAMILIES = [
     Family("Qwen-Image", _qwen, "enable_checkpointing_for_qwen_transformer", "transformer"),
     Family("Anima (Cosmos)", _anima, "enable_checkpointing_for_qwen_transformer", "transformer"),
     Family("Z-Image", _z_image, "enable_checkpointing_for_z_image_transformer", "transformer"),
-    Family("HiDream", _hidream, "enable_checkpointing_for_hi_dream_transformer", "transformer"),
+    Family("HiDream", _hidream, "enable_checkpointing_for_hi_dream_transformer", "transformer", has_real=False,
+           refused="its mixture-of-experts layers choose experts from the data"),
     Family("Hunyuan Video", _hunyuan_video, "enable_checkpointing_for_hunyuan_video_transformer", "transformer"),
     Family("Ernie Image", _ernie, "enable_checkpointing_for_ernie_transformer", "transformer", has_real=False),
     Family("Ideogram 4", _ideogram, "enable_checkpointing_for_ideogram_transformer", "transformer", has_real=False),
@@ -399,7 +399,8 @@ def _output(result) -> torch.Tensor:
 class _Setup:
     """one family's model, compiled or eager, wrapped the way training wraps it, with a LoRA on every linear layer"""
 
-    def __init__(self, ctx: Ctx, family: Family, real: bool, compile_: bool, dtype: torch.dtype | None = None):
+    def __init__(self, ctx: Ctx, family: Family, real: bool, compile_: bool, dtype: torch.dtype | None = None,
+                 offload: bool = False):
         from modules.module.LoRAModule import LoRAModule
         from modules.util import checkpointing_util
         from modules.util.config.TrainConfig import TrainConfig
@@ -415,12 +416,14 @@ class _Setup:
         config.training_method = TrainingMethod.LORA
         config.compile = compile_
         config.train_device = str(ctx.device)
-        config.temp_device = "cpu"
+        config.temp_device = "cpu" if ctx.is_gpu else "cpu:1"  # cpu:1: another device to the conductor, same memory
         part = getattr(config, family.part)
         part.gradient_checkpointing = True
-        part.offload_fraction = 0.0
-        part.activation_offloading = False
-        getattr(checkpointing_util, family.enable)(model, config, part)
+        part.offload_fraction = 0.5 if offload else 0.0
+        part.activation_offloading = offload
+        self.conductor = getattr(checkpointing_util, family.enable)(model, config, part)
+        if self.conductor is not None:
+            self.conductor.materialize()  # as BaseModel.materialize does when a part goes to the train device
         self.model = model
         self.loras = []
         gen = torch.Generator().manual_seed(7)
@@ -445,8 +448,19 @@ class _Setup:
         return out.detach().float()
 
     def grads(self) -> torch.Tensor:
-        return torch.cat([p.grad.float().flatten() for lora in self.loras for p in lora.parameters()
-                          if p.grad is not None])
+        # a LoRA on a layer whose output nothing uses gets no gradient eagerly, a zero one compiled
+        return torch.cat([(p.grad if p.grad is not None else torch.zeros_like(p)).float().flatten()
+                          for lora in self.loras for p in lora.parameters()])
+
+    def sample(self) -> torch.Tensor:
+        # sampling runs the compiled blocks too: eval mode, no gradients (a separate compiled variant)
+        self.model.eval()
+        try:
+            with torch.no_grad(), torch.autocast(self.ctx.device.type, dtype=self.dtype,
+                                                 enabled=self.dtype != torch.float32):
+                return _output(self.model(**self.inputs, **self.kwargs)).float()
+        finally:
+            self.model.train()
 
 
 def _compare(ctx: Ctx, rec: Rec, family: Family, real: bool) -> None:
@@ -459,22 +473,40 @@ def _compare(ctx: Ctx, rec: Rec, family: Family, real: bool) -> None:
     init_compile()
     torch._dynamo.reset()
     counters.clear()
+    label = f"{family.name} ({'real width' if real else 'tiny'})"
+    tolerance = (3e-2, 1e-1) if ctx.is_gpu else (1e-4, 1e-3)
+
+    def judge(text: str, outs: list[torch.Tensor], out_err: float, grad_err: float | None, graphs: int,
+              breaks: int, recompiles: int):
+        if graphs == 0:
+            rec.fail(f"{text}: nothing was compiled (the family's blocks weren't wrapped)")
+        elif breaks:
+            rec.fail(f"{text}: graph breaks")
+        elif recompiles:
+            rec.fail(f"{text}: the second step compiled again")
+        elif not all(finite(o) for o in outs) or out_err > tolerance[0] or (grad_err or 0) > tolerance[1]:
+            rec.fail(f"{text}: compiled and eager differ more than rounding")
+        else:
+            rec.line(f"ok: {text}")
+
     eager = _Setup(ctx, family, real, compile_=False)
-    out_e = eager.step()
-    grads_e = eager.grads()
+    out_e, grads_e = eager.step(), eager.grads()
+    sample_e = eager.sample()
     compiled = _Setup(ctx, family, real, compile_=True)
     t0 = time.perf_counter()
     out_c = compiled.step()
     ctx.sync()
     compile_s = time.perf_counter() - t0
     grads_c = compiled.grads()
-    compiled.step()  # a second step must not compile again
     graphs = counters["stats"].get("unique_graphs", 0)
+    compiled.step()
+    recompiles = counters["stats"].get("unique_graphs", 0) - graphs
+    sample_c = compiled.sample()
+    graphs_all = counters["stats"].get("unique_graphs", 0)
     breaks = sum(counters["graph_break"].values())
-    out_err, grad_err = rel_err(out_c, out_e), rel_err(grads_c, grads_e)
-    label = f"{family.name} ({'real width' if real else 'tiny'})"
-    text = (f"{label}: compiled vs eager output {out_err:.1e}, LoRA gradients {grad_err:.1e}; {graphs} graphs, "
-            f"{breaks} graph breaks, first step {compile_s:.0f} s")
+    out_err, grad_err, sample_err = rel_err(out_c, out_e), rel_err(grads_c, grads_e), rel_err(sample_c, sample_e)
+    text = (f"{label}: compiled vs eager output {out_err:.1e}, LoRA gradients {grad_err:.1e}, sampling "
+            f"{sample_err:.1e}; {graphs_all} graphs, {breaks} graph breaks, first step {compile_s:.0f} s")
     if real and ctx.is_gpu:
         def timed(setup):
             torch.cuda.reset_peak_memory_stats(ctx.device)
@@ -485,18 +517,41 @@ def _compare(ctx: Ctx, rec: Rec, family: Family, real: bool) -> None:
                  f"{mem_e:.2f} GiB")
         rec.metric(f"{family.name}: eager ms", ms_e)
         rec.metric(f"{family.name}: compiled ms", ms_c)
-    tolerance = (3e-2, 1e-1) if ctx.is_gpu else (1e-4, 1e-3)
-    if graphs == 0:
-        rec.fail(f"{text}: nothing was compiled (the family's blocks weren't wrapped)")
-    elif breaks:
-        rec.fail(f"{text}: graph breaks")
-    elif not finite(out_c) or not finite(grads_c) or out_err > tolerance[0] or grad_err > tolerance[1]:
-        rec.fail(f"{text}: compiled and eager differ more than rounding")
-    else:
-        rec.line(f"ok: {text}")
-    del eager, compiled
+    judge(text, [out_c, grads_c, sample_c], max(out_err, sample_err), grad_err, graphs_all, breaks, recompiles)
+    del compiled
+
+    if not real:
+        # layer + activation offloading: the other compiled path (BoundaryOffloadCheckpointLayer), against the
+        # same eager reference
+        torch._dynamo.reset()
+        counters.clear()
+        offloaded = _Setup(ctx, family, real, compile_=True, offload=True)
+        out_o, grads_o = offloaded.step(), offloaded.grads()
+        graphs = counters["stats"].get("unique_graphs", 0)
+        breaks = sum(counters["graph_break"].values())
+        out_err, grad_err = rel_err(out_o, out_e), rel_err(grads_o, grads_e)
+        judge(f"{label}, compiled with layer + activation offloading: output vs eager {out_err:.1e}, LoRA gradients "
+              f"{grad_err:.1e}; {graphs} graphs, {breaks} graph breaks", [out_o, grads_o], out_err, grad_err,
+              graphs, breaks, 0)
+        del offloaded
+    del eager
     if ctx.is_gpu:
         torch.cuda.empty_cache()
+
+
+def _expect_refused(ctx: Ctx, rec: Rec, family: Family):
+    # GenericTrainer refuses Compile for this family; check that it still fails, so the refusal can go once a new
+    # diffusers or torch makes it compile
+    torch._dynamo.reset()
+    try:
+        setup = _Setup(ctx, family, False, compile_=True)
+        setup.step()
+        setup.sample()
+    except Exception as e:
+        rec.line(f"ok: {family.name}: Compile fails as expected ({type(e).__name__}), and training refuses it before "
+                 f"loading: {family.refused}")
+        return
+    rec.warn(f"{family.name} compiles now: the refusal in GenericTrainer.start (Compile with {family.name}) can go")
 
 
 @check(SECTION, "Compile transformer blocks on every model family (random weights, no model files)",
@@ -508,6 +563,9 @@ def compile_families(ctx: Ctx, rec: Rec):
     # configs (a few blocks at the family's real hidden size, 512 px) give the speed and memory that matter
     for family in FAMILIES:
         for real in ((False, True) if ctx.is_gpu else (False,)):
+            if family.refused:
+                _expect_refused(ctx, rec, family)
+                break
             try:
                 _compare(ctx, rec, family, real)
             except Exception as e:  # one family failing must not hide the others
