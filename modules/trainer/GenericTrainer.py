@@ -131,6 +131,7 @@ class GenericTrainer(BaseTrainer):
 
         if multi.is_master():
             self.__save_config_to_workspace()
+            self.__check_concept_paths()
             if self.config.masked_training:
                 self.__report_images_without_mask()
 
@@ -271,15 +272,37 @@ class GenericTrainer(BaseTrainer):
                 f", the same choice without 'compressed' on the model tab): the same weights, uncompressed."
             )
 
-    def __report_images_without_mask(self):
-        # masked training gives an image without a mask file an all-white mask, which trains the whole image
+    def __load_concepts(self) -> list[ConceptConfig] | None:
         concepts = self.config.concepts
         if concepts is None:
             try:
                 with open(self.config.concept_file_name, "r", encoding="utf-8") as f:
                     concepts = [ConceptConfig.default_values().from_dict(c) for c in json.load(f)]
             except (OSError, ValueError):
-                return  # the data loader reports a missing or unreadable concepts file
+                return None  # the data loader reports a missing or unreadable concepts file
+        return concepts
+
+    def __check_concept_paths(self):
+        # the data loader lists each enabled concept's folder when the first epoch starts, after the model has loaded,
+        # and an empty path failed there as "No such file or directory: ''" without naming the concept
+        for concept in self.__load_concepts() or []:
+            if not concept.enabled:
+                continue
+            label = f"Concept '{concept.name}'" if concept.name else "A concept"
+            if self.config.concepts is None:
+                label += f" in {self.config.concept_file_name}"
+            if not concept.path:
+                raise ValueError(f"{label} has no folder (its path is empty). Choose the folder with its images on the "
+                                 f"concepts tab, or disable it.")
+            if not os.path.isdir(concept.path):
+                raise ValueError(f"{label} points to {concept.path!r}, which isn't a folder (relative paths start at "
+                                 f"{os.getcwd()}). Choose the folder with its images on the concepts tab, or disable it.")
+
+    def __report_images_without_mask(self):
+        # masked training gives an image without a mask file an all-white mask, which trains the whole image
+        concepts = self.__load_concepts()
+        if concepts is None:
+            return
         for concept, missing, total, examples in concept_stats.images_without_mask(
                 concepts, allow_videos=self.config.model_type.is_video_model()):
             print(f"Masked training: {missing} of {total} images in concept '{concept.name or concept.path}' "

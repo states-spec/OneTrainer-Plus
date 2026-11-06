@@ -4,6 +4,50 @@ import torch
 import torch.nn as nn
 
 
+# An opaque custom op, so torch.compile runs it as one call instead of tracing it. Each step's bounds depend on the
+# previous step's several times over, so inductor, which inlines elementwise chains into their users, built an
+# expression that grew exponentially with the steps: compiling a block with CANS OFT layers didn't finish in 20
+# minutes (torch 2.13; 4 fp32 steps alone took 135 s). The (B, 1, 1) bmm with ones that was meant to stop it is turned
+# into an elementwise multiply by inductor's bmm decomposition (torch 2.12 and later, every device). Eagerly it runs
+# exactly the operations it did inline, so uncompiled results are unchanged.
+def _cans_coefficients(lower_bound: torch.Tensor, steps: int, autocast_dtype: torch.dtype | None) -> list[torch.Tensor]:
+    # the operations of the inlined version, under the autocast it ran in (passed in, so a compiled graph and eager
+    # code get the same): under bf16 autocast the bmm rounds the bounds to bf16, and every coefficient keeps the dtype
+    # it had there, which decides how c3 * bmm(A, X) rounds
+    upper_bound = 1.0
+    coefficients = []
+    with torch.autocast(lower_bound.device.type, dtype=autocast_dtype, enabled=autocast_dtype is not None):
+        for _ in range(steps):
+            lb, ub = lower_bound, upper_bound
+            lb_ub = lb * ub
+            e_sq = (lb ** 2 + lb_ub + ub ** 2) / 3.0
+            K = 2.0 * e_sq ** 1.5
+            L = lb_ub * (lb + ub)
+            denom = K + L
+            alpha = 6.0 / denom
+            coefficients += [alpha * e_sq, -alpha / 3.0]
+
+            eps_val = (K - L) / denom
+            # kept from the inlined version, where it was meant to stop torch.compile from inlining the recursion:
+            # a (B, 1, 1) bmm with ones, an identity except for the autocast (or TF32) rounding it applies
+            eps_val = torch.bmm(eps_val, torch.ones_like(eps_val))
+
+            lower_bound = 1 - eps_val
+            upper_bound = 1 + eps_val
+    return coefficients
+
+
+@torch.library.custom_op("ot_oft::cans_coefficients", mutates_args=())
+def cans_coefficients(lower_bound: torch.Tensor, steps: int, autocast_dtype: torch.dtype | None) -> list[torch.Tensor]:
+    """c1 and c3 of every CANS step (c1 of step 0, c3 of step 0, c1 of step 1, ...), from the first lower bound of the
+    singular values (the upper bound starts at 1)"""
+    return _cans_coefficients(lower_bound, steps, autocast_dtype)
+
+
+# the same operations on fake tensors give the shapes and the dtypes
+cans_coefficients.register_fake(_cans_coefficients)
+
+
 class MultiplicativeDropoutLayer(nn.Module):
     """
     Implements the multiplicative dropout layer for OFT.
@@ -49,6 +93,7 @@ class OFTRotationModule(nn.Module):
         dropout_probability=0.0,
         oft_cans=False,
         oft_clipped_norm: float | None = None,
+        oft_cans_fp32=False,
     ):
         super().__init__()
         self.r = r
@@ -65,6 +110,8 @@ class OFTRotationModule(nn.Module):
         self.oft_scaled = oft_scaled
         self.use_cayley_neumann = use_cayley_neumann
         self.oft_cans = oft_cans
+        # with CANS: build the rotation in float32 even under bf16/fp16 autocast (see _cayley_batch)
+        self.oft_cans_fp32 = oft_cans_fp32
         # Create indices for upper triangle (excluding diagonal)
         rows, cols = torch.triu_indices(block_size, block_size, 1)
         self.register_buffer("rows", rows, persistent=False)
@@ -105,30 +152,16 @@ class OFTRotationModule(nn.Module):
         g_norm = G.abs().sum(dim=-1, keepdim=True).amax(dim=-2, keepdim=True).clamp_min(eps).detach()
         X = G / g_norm
 
-        # the smallest singular value of G is >= 1, so the one of X is >= 1 / g_norm
-        lower_bound = 1.0 / g_norm
-        upper_bound = 1.0
+        # the smallest singular value of G is >= 1, so the one of X is >= 1 / g_norm. The bounds (and so the
+        # coefficients) depend on G only through the detached g_norm: no gradient flows through them
+        device_type = G.device.type
+        autocast_dtype = torch.get_autocast_dtype(device_type) if torch.is_autocast_enabled(device_type) else None
+        coefficients = cans_coefficients(1.0 / g_norm, steps, autocast_dtype)
 
-        for _ in range(steps):
-            lb, ub = lower_bound, upper_bound
-            lb_ub = lb * ub
-            e_sq = (lb ** 2 + lb_ub + ub ** 2) / 3.0
-            K = 2.0 * e_sq ** 1.5
-            L = lb_ub * (lb + ub)
-            denom = K + L
-            alpha = 6.0 / denom
-            c1 = alpha * e_sq
-            c3 = -alpha / 3.0
-
+        for step in range(steps):
+            c1, c3 = coefficients[2 * step], coefficients[2 * step + 1]
             A = torch.bmm(X, X.mT)
             X = c1 * X + c3 * torch.bmm(A, X)
-
-            eps_val = (K - L) / denom
-            # a (B, 1, 1) bmm with ones is an identity; it keeps torch.compile from inlining the bound recursion
-            eps_val = torch.bmm(eps_val, torch.ones_like(eps_val))
-
-            lower_bound = 1 - eps_val
-            upper_bound = 1 + eps_val
 
         return X
 
@@ -157,6 +190,18 @@ class OFTRotationModule(nn.Module):
         """
         Perform the Cayley parametrization on a batch of skew-symmetric matrices.
         """
+        if (oft_cans or not use_cayley_neumann) and self.oft_cans_fp32:
+            # Under bf16 (or fp16) autocast every matrix product of the rotation - the clipping's power iteration,
+            # (I + Q)^2 and each CANS step - runs in that dtype, and so do the CANS bounds, which keeps the rotation
+            # ~5e-3 from orthogonal. In float32 it is exact to ~1e-7; the products are block_size x block_size, small
+            # next to the layer. Without autocast and with float32 OFT weights it computes the same as without the option.
+            with torch.autocast(Q.device.type, enabled=False):
+                return self._cayley_batch_impl(Q.float(), block_size, use_cayley_neumann, oft_cans).to(Q.dtype)
+        return self._cayley_batch_impl(Q, block_size, use_cayley_neumann, oft_cans)
+
+    def _cayley_batch_impl(
+        self, Q: torch.Tensor, block_size: int, use_cayley_neumann: bool, oft_cans: bool,
+    ) -> torch.Tensor:
         b, _ = Q.shape
         previous_dtype = Q.dtype
 

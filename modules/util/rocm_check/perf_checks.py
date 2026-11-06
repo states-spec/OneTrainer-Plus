@@ -447,3 +447,56 @@ def compile_speed(ctx: Ctx, rec: Rec):
     rec.metric("eager ms", eager_ms)
     rec.metric("compiled ms", compiled_ms)
     rec.metric("compile seconds", compile_s)
+
+    # what the option compiles in training: the same block with a LoRA (rank 16, fp32 weights) on every linear layer,
+    # under bf16 autocast, inside OneTrainer's checkpoint layer (checkpointing on), and only the LoRA trained
+    from modules.module.LoRAModule import LoRAModule
+    from modules.util.checkpointing_util import create_checkpoint
+
+    def training_block(compile_: bool):
+        torch.manual_seed(0)
+        base = _DiTBlock(1536, 24).to(ctx.device, torch.bfloat16).requires_grad_(False)
+        loras = []
+        for name, module in list(base.named_modules()):
+            if isinstance(module, nn.Linear):
+                lora = LoRAModule(name, module, 16, 16.0)
+                with torch.no_grad():  # LoRA up starts at 0: move it so the delta is exercised
+                    lora.lora_up.weight.copy_(_rand(ctx, *lora.lora_up.weight.shape, dtype=torch.float32,
+                                                    scale=0.01, seed=7))
+                lora.to(ctx.device)
+                lora.hook_to_module()
+                loras.append(lora)
+        return create_checkpoint(base, checkpointing=True, compile=compile_), loras
+
+    def step(block, loras):
+        for lora in loras:
+            for p in lora.parameters():
+                p.grad = None
+        with torch.autocast(ctx.device.type, dtype=torch.bfloat16):
+            out = block(x)
+        out.float().sum().backward()
+        return out
+
+    results = {}
+    for compile_ in (False, True):
+        block, loras = training_block(compile_)
+        if ctx.is_gpu:
+            torch.cuda.reset_peak_memory_stats(ctx.device)
+        t0 = time.perf_counter()
+        out = step(block, loras)
+        ctx.sync()
+        first_s = time.perf_counter() - t0
+        grads = [p.grad.float().clone() for lora in loras for p in lora.parameters()]
+        ms = ctx.bench(lambda block=block, loras=loras: step(block, loras))
+        peak = torch.cuda.max_memory_allocated(ctx.device) / 2**20 if ctx.is_gpu else 0.0
+        results[compile_] = (out.detach().float(), grads, ms, peak, first_s)
+    (out_e, grads_e, ms_e, peak_e, _), (out_c, grads_c, ms_c, peak_c, first_c) = results[False], results[True]
+    grad_err = max(rel_err(c, e) for c, e in zip(grads_c, grads_e, strict=True))
+    rec.expect(finite(out_c) and rel_err(out_c, out_e) < 3e-2 and grad_err < 5e-2,
+               f"with LoRA and checkpointing (the training path): compiled vs eager output "
+               f"{rel_err(out_c, out_e):.1e}, LoRA gradients {grad_err:.1e}")
+    rec.line(f"with LoRA and checkpointing: eager {ms_e:.2f} ms, compiled {ms_c:.2f} ms ({ms_e / ms_c:.2f}x), "
+             f"peak allocated {peak_e:.0f} vs {peak_c:.0f} MiB, first compile {first_c:.0f} s")
+    rec.metric("LoRA + checkpointing eager ms", ms_e)
+    rec.metric("LoRA + checkpointing compiled ms", ms_c)
+    rec.metric("LoRA + checkpointing compile seconds", first_c)

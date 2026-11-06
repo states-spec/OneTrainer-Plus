@@ -130,7 +130,12 @@ class BaseModelTabView(ABC):
 
         # compile
         self.components.label(frame, row, 3, "Compile transformer blocks",
-                         tooltip="Uses torch.compile and Triton to significantly speed up training. Only applies to transformer/unet. Disable in case of compatibility issues.")
+                         tooltip="Uses torch.compile and Triton to speed up training. Only applies to the transformer/unet blocks. "
+                                 "The first run compiles for a while (a few minutes on a large model, and the first steps "
+                                 "or samples wait for it); later runs reuse the compiled kernels (on Linux and macOS kept "
+                                 "in ~/.cache/OneTrainer-Plus/torchinductor). Results differ from uncompiled training by "
+                                 "rounding, so keep it the same when comparing runs. Disable in case of compatibility issues.",
+                         wide_tooltip=True)
         self.components.switch(frame, row, 4, ui_state, "compile")
 
         row += 1

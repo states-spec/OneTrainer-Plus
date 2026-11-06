@@ -81,6 +81,19 @@ def script_imports(allow_zluda: bool = True):
         os.makedirs(path_util.diagnostics_path("tunableop"), exist_ok=True)
         os.environ["PYTORCH_TUNABLEOP_FILENAME"] = path_util.diagnostics_path("tunableop", "tunableop_results%d.csv")
 
+    # torch.compile (Compile transformer blocks, Compiled Optimizer) keeps its compiled kernels in
+    # $TMPDIR/torchinductor_<user> by default, and /tmp is cleared at every boot on many Linux systems (a RAM-backed
+    # tmpfs on Fedora), so the first compiled run after each reboot compiled everything again (minutes on a large
+    # model). A cache under ~/.cache survives that; TORCHINDUCTOR_CACHE_DIR still wins when set.
+    if not sys.platform.startswith('win') and not os.environ.get("TORCHINDUCTOR_CACHE_DIR"):
+        cache_home = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+        inductor_cache = os.path.join(cache_home, "OneTrainer-Plus", "torchinductor")
+        try:
+            os.makedirs(inductor_cache, exist_ok=True)
+            os.environ["TORCHINDUCTOR_CACHE_DIR"] = inductor_cache
+        except OSError:
+            pass  # an unwritable home: PyTorch's own default
+
     if allow_zluda and sys.platform.startswith('win'):
         from modules.zluda import ZLUDAInstaller
 
