@@ -400,7 +400,7 @@ class _Setup:
     """one family's model, compiled or eager, wrapped the way training wraps it, with a LoRA on every linear layer"""
 
     def __init__(self, ctx: Ctx, family: Family, real: bool, compile_: bool, dtype: torch.dtype | None = None,
-                 offload: bool = False):
+                 offload: bool = False, activations: bool = True, async_transfers: bool = True):
         from modules.module.LoRAModule import LoRAModule
         from modules.util import checkpointing_util
         from modules.util.config.TrainConfig import TrainConfig
@@ -419,8 +419,9 @@ class _Setup:
         config.temp_device = "cpu" if ctx.is_gpu else "cpu:1"  # cpu:1: another device to the conductor, same memory
         part = getattr(config, family.part)
         part.gradient_checkpointing = True
+        config.async_offloading = async_transfers
         part.offload_fraction = 0.5 if offload else 0.0
-        part.activation_offloading = offload
+        part.activation_offloading = offload and activations
         self.conductor = getattr(checkpointing_util, family.enable)(model, config, part)
         if self.conductor is not None:
             self.conductor.materialize()  # as BaseModel.materialize does when a part goes to the train device
@@ -534,8 +535,35 @@ def _compare(ctx: Ctx, rec: Rec, family: Family, real: bool) -> None:
               f"{grad_err:.1e}; {graphs} graphs, {breaks} graph breaks", [out_o, grads_o], out_err, grad_err,
               graphs, breaks, 0)
         del offloaded
+        if ctx.is_gpu and rec.lines[-1].startswith("FAIL"):
+            _offload_breakdown(ctx, rec, family, label, out_e, grads_e)
     del eager
     if ctx.is_gpu:
+        torch.cuda.empty_cache()
+
+
+def _offload_breakdown(ctx: Ctx, rec: Rec, family: Family, label: str, out_e: torch.Tensor, grads_e: torch.Tensor):
+    # which part of offloading the failure comes from, against the same eager reference without offloading: on a CPU
+    # "cpu:1" is the same memory, so a layer used before its transfer finished still computes right there and only a
+    # GPU shows such a problem
+    for name, compile_, activations, async_transfers in (
+            ("eager, layer + activation offloading", False, True, True),
+            ("eager, layer offloading only", False, False, True),
+            ("compiled, layer offloading only", True, False, True),
+            ("compiled, layer + activation offloading, synchronous transfers", True, True, False),
+            ("eager, layer offloading only, synchronous transfers", False, False, False)):
+        try:
+            torch._dynamo.reset()
+            setup = _Setup(ctx, family, False, compile_=compile_, offload=True, activations=activations,
+                           async_transfers=async_transfers)
+            out, grads = setup.step(), setup.grads()
+            second, second_grads = setup.step(), setup.grads()
+            rec.line(f"  {label}, {name}: output {rel_err(out, out_e):.1e}, LoRA gradients "
+                     f"{rel_err(grads, grads_e):.1e}; second step vs first {rel_err(second, out):.1e}, "
+                     f"{rel_err(second_grads, grads):.1e}")
+            del setup
+        except Exception as e:
+            rec.line(f"  {label}, {name}: {type(e).__name__}: {e}"[:400])
         torch.cuda.empty_cache()
 
 
