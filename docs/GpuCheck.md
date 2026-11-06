@@ -103,11 +103,11 @@ results up to the check that was running (the report names it). The exit code is
    clipping, the same in float32 (CANS in Float32), float8 and (on a GPU) int W8A8 weights. Compiling changes the rounding, so the two are compared by
    size: the first step's loss (the same weights, so only the forward pass can differ) and the trained weights,
    which must stay far closer than two seeds; a graph break, or nothing compiled, fails. The report line gives
-   each pair's compiled variants, run and step times and (on a GPU) peak memory. OneTrainer+ sets
+   each pair's compiled variants, run and step times and (on a GPU) peak memory. The LoRA run is
+   repeated twice from the compile cache it filled, and those two must be bit-identical; the line also shows how far
+   the first run (empty cache) ended from them (about 2e-3 on an RX 7900 XTX). Two more compiled runs use
    `TORCHINDUCTOR_DETERMINISTIC=1` (PyTorch's switch that skips inductor's on-device benchmarking of kernel
-   configs), so the repeat from the warm cache should be bit-identical. Two more compiled runs turn it off
-   (`TORCHINDUCTOR_DETERMINISTIC=0`): on an RX 7900 XTX two such runs ended 2.3e-3 apart, and the line shows how far
-   apart they end on your GPU and their step time against the deterministic mode. The adapters check also compares OFT's exact rotation (CANS) built in
+   configs): an info line with how far apart they end and their step time. The adapters check also compares OFT's exact rotation (CANS) built in
    the training data type and in float32 (CANS in Float32): orthogonality and, with `--full`, speed.
    When a run fails, the folder with every run is kept (the report names it), each with its whole output in
    `diag.log`. A run that crashes in native code (ROCm aborts the process on a GPU fault or a failed assert in a

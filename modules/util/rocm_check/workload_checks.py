@@ -642,36 +642,37 @@ def compiled_training(ctx: Ctx, rec: Rec):
                 rec.line(f"ok: {text}")
 
             if name == "LoRA":
-                # the same compiled run again, from the compile cache the first one filled
+                # the same compiled run twice more, from the compile cache the first one filled. On the 7900 XTX the
+                # first compiled run in an empty cache ended ~2e-3 from every later one (deterministic mode on or off),
+                # while later runs repeated bit-exactly: what has to hold is that later runs repeat
                 again = run("LoRA compiled again", {}, ["compile=true"])
+                third = run("LoRA compiled a third time", {}, ["compile=true"])
                 w_again = finished("LoRA, compiled again", again)
-                if w_again is not None:
-                    repeat = _weights_diff(w_compiled, w_again)
-                    text = (f"LoRA compiled again (warm compile cache): {again['seconds']:.0f} s vs "
-                            f"{compiled['seconds']:.0f} s cold, weights vs the first compiled run {repeat:.1e}")
+                w_third = finished("LoRA, compiled a third time", third)
+                if w_again is not None and w_third is not None:
+                    first_vs_later = _weights_diff(w_compiled, w_again)
+                    repeat = _weights_diff(w_again, w_third)
+                    text = (f"LoRA compiled again from the warm compile cache, twice: weights {repeat:.1e} apart; "
+                            f"{again['seconds']:.0f} s vs {compiled['seconds']:.0f} s cold; the first compiled run "
+                            f"(empty cache) vs later ones {first_vs_later:.1e}")
                     if repeat == 0:
-                        rec.line(f"ok: {text} (bit-identical)")
-                    elif os.environ.get("TORCHINDUCTOR_DETERMINISTIC") == "1":
-                        rec.warn(f"{text}: inductor's deterministic mode (on by default) doesn't make compiled runs "
-                                 f"repeat here, so expect rounding-level differences between compiled runs")
+                        rec.line(f"ok: {text}")
                     else:
-                        rec.warn(f"{text}: TORCHINDUCTOR_DETERMINISTIC="
-                                 f"{os.environ.get('TORCHINDUCTOR_DETERMINISTIC')!r} here turns off the deterministic "
-                                 f"mode that makes compiled runs repeat")
+                        rec.warn(f"{text}: compiled runs from the same cache don't repeat bit-exactly here, so expect "
+                                 f"rounding-level differences between compiled runs")
 
-                # without inductor's deterministic mode (OneTrainer+ turns it on, script_imports), inductor picks kernel
-                # configs by timing them on the device and can pick another reduction order next time: how far apart
-                # do two such runs end, and what does the deterministic mode cost?
-                timed = {"TORCHINDUCTOR_DETERMINISTIC": "0"}
-                first_timed = run("LoRA compiled without deterministic mode", {}, ["compile=true"], timed)
-                second_timed = run("LoRA compiled without deterministic mode again", {}, ["compile=true"], timed)
-                w_first_timed = finished("LoRA, compiled with TORCHINDUCTOR_DETERMINISTIC=0", first_timed)
-                w_second_timed = finished("LoRA, compiled with TORCHINDUCTOR_DETERMINISTIC=0 again", second_timed)
-                if w_first_timed is not None and w_second_timed is not None:
-                    repeat = _weights_diff(w_first_timed, w_second_timed)
-                    rec.line(f"info: LoRA compiled with TORCHINDUCTOR_DETERMINISTIC=0, twice: weights {repeat:.1e} "
-                             f"apart, vs eager {_weights_diff(w_eager, w_second_timed):.1e}; step "
-                             f"{step_ms(second_timed):.0f} ms vs {step_ms(again):.0f} ms with the deterministic mode")
+                # inductor's deterministic mode skips its on-device timing of kernel configs (off by default, as in
+                # PyTorch): do two such runs repeat, and what does it cost?
+                deterministic = {"TORCHINDUCTOR_DETERMINISTIC": "1"}
+                first_det = run("LoRA compiled deterministic", {}, ["compile=true"], deterministic)
+                second_det = run("LoRA compiled deterministic again", {}, ["compile=true"], deterministic)
+                w_first_det = finished("LoRA, compiled with TORCHINDUCTOR_DETERMINISTIC=1", first_det)
+                w_second_det = finished("LoRA, compiled with TORCHINDUCTOR_DETERMINISTIC=1 again", second_det)
+                if w_first_det is not None and w_second_det is not None:
+                    rec.line(f"info: LoRA compiled with TORCHINDUCTOR_DETERMINISTIC=1, twice: weights "
+                             f"{_weights_diff(w_first_det, w_second_det):.1e} apart, vs eager "
+                             f"{_weights_diff(w_eager, w_second_det):.1e}; step {step_ms(second_det):.0f} ms vs "
+                             f"{step_ms(third):.0f} ms without it")
     finally:
         if failed:
             rec.line(f"the runs are kept in {base_dir} (each run's diag.log and diag.jsonl)")
