@@ -63,9 +63,17 @@ def main():
         child_main(args.child, ctx)
         return 0
 
+    report = Report(ctx, [os.path.basename(sys.executable)] + sys.argv, name="moss_check",
+                    title="OneTrainer MOSS-Image check")
     error, note = moss_checks.preflight(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     if error:
-        print(f"moss_check: {error}", file=sys.stderr)
+        # written over the last report, which would otherwise look like this run's
+        report.results.append({"section": "0 environment", "name": "the Python running the check", "status": FAIL,
+                               "lines": [f"FAIL: {line.strip()}" if i == 0 else line.strip()
+                                         for i, line in enumerate(error.splitlines())],
+                               "metrics": {}, "seconds": 0.0})
+        report.write()
+        print(f"moss_check: {error}\nreport written to {report.txt_path} and {report.json_path}", file=sys.stderr)
         return 2
     if note:
         print(note)
@@ -79,8 +87,6 @@ def main():
     ctx.cache.update({"moss_model": args.model, "moss_config": os.path.abspath(args.config) if args.config else None,
                       "moss_resolution": args.resolution, "moss_runs": runs})
 
-    report = Report(ctx, [os.path.basename(sys.executable)] + sys.argv, name="moss_check",
-                    title="OneTrainer MOSS-Image check")
     run_checks(ctx, report, args.only, args.skip)
     note = moss_checks.finish(ctx, args.keep)
     print()
