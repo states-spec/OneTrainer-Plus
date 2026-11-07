@@ -180,7 +180,12 @@ runs. A GPU-only check decodes at 1024 px in fresh processes (your MIOpen caches
 the prompt (classifier-free guidance runs both as one masked batch), and compares each run with the baseline and a
 repeat of it: layer + activation offloading, disk streaming off, text encoder offloading, resuming (Continue from last
 backup, Continue from Backup), compiled blocks, and the saved LoRA loaded back at learning rate 0. Runs that train the
-same weights must also sample the same images. Other programs share the GPU, so the free memory before each run
+same weights must also sample the same images. Compiling changes the rounding, and an adaptive optimizer such as Prodigy
+turns a rounding difference into another trajectory, so the compiled run is judged against a yardstick: the eager run
+from the start LoRA with every value moved by 2^-8 of itself (about one bfloat16 rounding step). The compiled run's
+change from the start must point about as close to the baseline's as the yardstick's does (cosine), be about as large,
+start from the same loss, and compile without graph breaks; whether the compiled gradients are right is rocm_check's
+"compile per model family" (MOSS family). Other programs share the GPU, so the free memory before each run
 is only reported, the runs log the GPU memory at every load and unload (`OT_LOG_VRAM`), and a run that runs out of
 GPU memory is tried once more (the first attempt's folder is kept as `<run>_out_of_memory`). `--config` takes the training settings from your config; the data
 (synthetic images with masks and captions of 3 to 70 words), schedule, resolution (`--resolution`, default 512) and

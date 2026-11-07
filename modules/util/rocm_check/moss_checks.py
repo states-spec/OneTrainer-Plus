@@ -849,48 +849,117 @@ def training_runs(ctx: Ctx, rec: Rec):
             rec.metric(f"{name}: step s", s["step s median"])
 
 
-@check(SECTION_TRAINING, "compiled training: Compile transformer blocks against the eager baseline", timeout=3600.0,
-       note="one compiled training run")
+def _nudged_lora(src: str, dst: str, relative: float, seed: int):
+    """src with every value moved by `relative` of itself, up or down at random (zeros stay zero)"""
+    from safetensors import safe_open
+    from safetensors.torch import save_file
+
+    generator = torch.Generator().manual_seed(seed)
+    tensors = {}
+    with safe_open(src, framework="pt") as f:
+        metadata = f.metadata()
+        for key in sorted(f.keys()):
+            t = f.get_tensor(key)
+            if t.is_floating_point():
+                sign = torch.randint(0, 2, t.shape, generator=generator, dtype=torch.float64) * 2 - 1
+                t = (t.double() * (1 + relative * sign)).to(t.dtype)
+            tensors[key] = t
+    save_file(tensors, dst, metadata=metadata)
+
+
+def _versus_eager(base: dict, w_base: dict, start_base: dict, r: dict, w: dict, start: dict) -> dict:
+    """a run that rounds differently against the eager baseline: the first step's loss (the same weights, so the forward
+    pass alone), the losses, the last validation loss, the weights, and the change from each run's own start LoRA"""
+    keys = sorted(w_base)
+    eager = torch.cat([(w_base[k] - start_base[k]).flatten() for k in keys])
+    other = torch.cat([(w[k] - start[k]).flatten() for k in keys])
+    base_losses, losses = _losses(base["diag"]), _losses(r["diag"])
+    rel = [abs(base_losses[s] - losses[s]) / max(abs(base_losses[s]), 1e-12)
+           for s in sorted(base_losses.keys() & losses.keys())]
+    val_base, val = _validation_losses(base["diag"]), _validation_losses(r["diag"])
+    last = max(val_base.keys() & val.keys(), default=None)
+    return {
+        "first loss": rel[0] if rel else float("inf"),
+        "losses": max(rel, default=float("inf")),
+        "validation": max((abs(val_base[last][k] - val[last][k]) / max(abs(val_base[last][k]), 1e-12)
+                           for k in val_base[last] if k in val[last]), default=float("nan"))
+        if last is not None else float("nan"),
+        "validation step": last,
+        "weights": _weights_diff(w_base, w),
+        "cosine": torch.nn.functional.cosine_similarity(eager, other, dim=0).item(),
+        "size": (other.norm() / eager.norm().clamp_min(1e-30)).item(),
+    }
+
+
+def _versus_text(v: dict) -> str:
+    return (f"first loss {v['first loss']:.1e}, losses up to {v['losses']:.1e}, validation {v['validation']:.1e} at "
+            f"step {v['validation step']}, weights {v['weights']:.1e}; the change from its start LoRA points as "
+            f"eager's does to cosine {v['cosine']:.3f}, its size {v['size']:.2f}x eager's")
+
+
+@check(SECTION_TRAINING, "compiled training: Compile transformer blocks against the eager baseline, with an eager run "
+                         "from a start LoRA moved by rounding as the yardstick", timeout=3600.0,
+       note="two training runs: the eager yardstick and the compiled one")
 def compiled_training(ctx: Ctx, rec: Rec):
     base = ctx.cache.get("moss_baseline")
     if base is None:
         rec.skip("needs the baseline of the training runs check")
         return
+    # compiling changes the rounding (fused kernels keep float32 in between), so a compiled run can't match eager bit by
+    # bit, and an adaptive optimizer turns rounding into another trajectory: Prodigy starts at D = 1e-6, its first
+    # updates are about lr * D * sign(gradient) per value (Adam's first step), so a value whose gradient is near zero
+    # moves the full step one way or the other, and rounding moves when D grows (the user's config on the 7900 XTX:
+    # weights 1.5 apart after 8 steps, the change from the start pointing as eager's to cosine 0.67, the same size). So
+    # the yardstick for the compiled run is how far rounding alone takes the eager run: the same run from the start LoRA
+    # with every value moved by 2^-8 of itself (about one bfloat16 rounding step), up or down at random
+    start_path = ctx.cache["moss_initial_lora"]
+    nudged_path = os.path.join(ctx.cache["moss_runs"], "start_lora_nudged.safetensors")
+    _nudged_lora(start_path, nudged_path, 2.0 ** -8, seed=3)
+    ref = _run(ctx, "eager, start LoRA nudged", [], lora=nudged_path)
     r = _run(ctx, "compiled", ["compile=true"], env={"TORCH_LOGS": "recompiles,graph_breaks"})
+    w_ref = _finished(rec, "eager, start LoRA nudged by 2^-8", ref)
     w = _finished(rec, "compiled", r)
-    if w is None:
+    if w_ref is None:
+        ctx.cache["moss_failed"] = True
+    w_base = _weights(base["output"])
+    if w is None or w.keys() != w_base.keys():
+        if w is not None:
+            rec.fail(f"compiled: the saved LoRA has other tensors than eager's ({len(w)} vs {len(w_base)})")
         ctx.cache["moss_failed"] = True
         return
+    start = _weights(start_path)
+    v = _versus_eager(base, w_base, start, r, w, start)
+    yardstick = _versus_eager(base, w_base, start, ref, w_ref, _weights(nudged_path)) \
+        if w_ref is not None and w_ref.keys() == w_base.keys() else None
+    if yardstick:
+        rec.line(f"yardstick: eager from the nudged start vs eager: {_versus_text(yardstick)}")
     graphs, breaks = _compile_stats(r["log"])
     recompiles = len(re.findall(r"Recompiling function", r["log"]))
-    w_base = _weights(base["output"])
-    diff = _weights_diff(w_base, w)
-    # the distance alone overstates it with an adaptive step size: Prodigy's D grows from 1e-6 within the first steps,
-    # rounding moves when it grows, and the whole update scales with it (the user's config: weights 1.5 apart after 8
-    # steps). What the compiled blocks must keep is the update's direction from the common start
-    start = _weights(ctx.cache["moss_initial_lora"])
-    eager_delta = torch.cat([(w_base[k] - start[k]).flatten() for k in sorted(w_base)])
-    compiled_delta = torch.cat([(w[k] - start[k]).flatten() for k in sorted(w_base)])
-    cosine = torch.nn.functional.cosine_similarity(eager_delta, compiled_delta, dim=0).item()
-    ratio = (compiled_delta.norm() / eager_delta.norm().clamp_min(1e-30)).item()
-    base_losses, losses = _losses(base["diag"]), _losses(r["diag"])
-    first = min(base_losses.keys() & losses.keys(), default=None)
-    first_diff = abs(base_losses[first] - losses[first]) / max(abs(base_losses[first]), 1e-12) \
-        if first is not None else float("inf")
-    s_base, s = _summary(base), _summary(r)
-    text = (f"compiled vs eager: first loss {first_diff:.1e}, weights {diff:.1e}; the change from the start LoRA "
-            f"points the same way to cosine {cosine:.3f}, its size {ratio:.2f}x eager's; {graphs} compiled variants "
-            f"({recompiles} recompiles), {breaks} graph breaks; step {s.get('step s median') or 0:.2f} s vs "
-            f"{s_base.get('step s median') or 0:.2f} s")
-    if graphs == 0 or breaks or first_diff > 2e-2 or cosine < 0.7:
+    s_eager, s = _summary(ref if w_ref is not None else base), _summary(r)
+    text = (f"compiled vs eager: {_versus_text(v)}; {graphs} compiled variants ({recompiles} recompiles), {breaks} graph "
+            f"breaks; step {s.get('step s median') or 0:.2f} s vs {s_eager.get('step s median') or 0:.2f} s eager")
+    # 1 - cosine: how far the change from the start turned away from eager's
+    spread = 1 - v["cosine"]
+    ref_spread = 1 - yardstick["cosine"] if yardstick else None
+    # a yardstick that moved the first loss far less than compiling did is smaller than compiling's rounding, and a
+    # direction beyond it then only warns
+    small = yardstick is not None and yardstick["first loss"] < v["first loss"] / 4
+    problem = ("nothing was compiled" if graphs == 0 else "graph breaks" if breaks else
+               "the compiled forward pass differs" if v["first loss"] > 2e-2 else
+               "the compiled run's update has another size" if not 0.5 <= v["size"] <= 2.0 else
+               "the compiled run trained in another direction than rounding takes the eager run"
+               if ref_spread is not None and spread > 2 * ref_spread + 0.1 and not small else None)
+    if problem:
         ctx.cache["moss_failed"] = True
-        rec.fail(f"{text}: " + ("nothing was compiled" if graphs == 0 else "graph breaks" if breaks else
-                                "the compiled forward pass differs" if first_diff > 2e-2 else
-                                "the compiled run trained in another direction"))
-    elif cosine < 0.9:
-        rec.warn(f"{text}: the compiled run's update points further from eager's than rounding usually makes it")
+        rec.fail(f"{text}: {problem}")
+    elif ref_spread is None:
+        rec.warn(f"{text}: no yardstick to judge the direction by (the nudged eager run failed)")
+    elif spread > ref_spread + 0.05:
+        rec.warn(f"{text}: further from eager than the nudged start takes it (cosine {yardstick['cosine']:.3f})"
+                 + ("; the nudge changed the first loss less than a quarter as much as compiling did, so the "
+                    "yardstick may be smaller than compiling's rounding" if small else ""))
     else:
-        rec.line(f"ok: {text}")
+        rec.line(f"ok: {text}: within what rounding does to the eager run (cosine {yardstick['cosine']:.3f})")
 
 
 @check(SECTION_TRAINING, "the saved LoRA loaded back at learning rate 0 saves the same tensors", timeout=3600.0)
