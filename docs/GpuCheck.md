@@ -158,6 +158,32 @@ processes vary between runs, and the first run in a new environment fills its ke
 times). For the real workload, train your config in both environments with `diag_ab` and `python:` variants
 ([RunDiagnostics.md](RunDiagnostics.md)).
 
+## MOSS-Image on the real model (`scripts/moss_check.py`)
+
+On the `koratahiu-moss-implementation-experimental` branch only. It needs the real model (`OpenMOSS-Team/MOSS-Image-Base`,
+a 27 GB download on first use), about 50 GB of RAM (float32 references on the CPU) and about 30 minutes on a 7900 XTX:
+
+```sh
+./run-cmd.sh moss_check                                  # built-in training settings (bf16, DoRA, ADOPT_ADV, EMA, masks)
+./run-cmd.sh moss_check --config training_configs/my.json  # your own optimizer, LoRA, dtypes and EMA settings
+./run-cmd.sh moss_check --full                           # also a short full fine-tune (writes a ~10 GB transformer)
+```
+
+Section 1 loads the real weights and compares bf16 on the GPU with float32 on the CPU, given the same inputs: the text
+encoder (only Qwen3.5's language model is loaded; fla's linear-attention kernels against PyTorch's; a padded batch,
+as sampling encodes prompt and negative prompt together, against single captions), the FLUX.2 VAE (encode, decode,
+round trip, the latent packing, a first and a second decode at 1024 px) and the transformer (two texts of different
+lengths in one batch, i.e. with the text mask, against each sample alone). Section 2 trains LoRAs through
+`scripts/train.py` from one saved start, with a validation concept and a sample whose negative prompt is longer than
+the prompt (classifier-free guidance runs both as one masked batch), and compares each run with the baseline and a
+repeat of it: layer + activation offloading, disk streaming off, text encoder offloading, resuming (Continue from last
+backup, Continue from Backup), compiled blocks, and the saved LoRA loaded back at learning rate 0. Runs that train the
+same weights must also sample the same images. `--config` takes the training settings from your config; the data
+(synthetic images with masks and captions of 3 to 70 words), schedule, resolution (`--resolution`, default 512) and
+outputs are the check's. The report goes to `diagnostics/moss_check/moss_check_report.txt`/`.json`, every run's sample
+images to `diagnostics/moss_check/samples/` (the step-0 sample is the base model's image of the prompt: look at it for
+prompt following), and the runs themselves are kept after a failure or with `--keep`.
+
 ## Adding to it
 
 - A new model family with other attention or MLP sizes: add a row to `modules/util/rocm_check/shapes.py`.

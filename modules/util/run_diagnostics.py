@@ -8,6 +8,7 @@ is one record and is flushed at once, so a crash or a GPU hang still leaves ever
   phase    a stretch of the run (loading, caching, sampling, validation, backup, save, final save): its duration, the
            memory before and after, the peak inside it, and the fragmentation after it
   move     model parts loaded onto or unloaded from the GPU (BaseModel.materialize/evict), with the same numbers
+  validation  each validation concept's loss at a validation run
   error    the exception that ended the run (an out-of-memory error included), with the memory state at that moment
 """
 import contextlib
@@ -229,6 +230,13 @@ class RunDiagnostics:
             digest, tensors = f"not readable: {type(e).__name__}: {e}", 0
         self.__write("output", path=os.path.abspath(path), digest=digest, tensors=tensors,
                      seconds=time.perf_counter() - start)
+
+    def validation(self, global_step: int, losses: dict[str, float]):
+        """the validation loss of each validation concept (its label as in TensorBoard), averaged over its images"""
+        if self.__file is None:
+            return
+        with self.__guard(f"the validation at step {global_step}"):
+            self.__write("validation", step=global_step, losses=losses)
 
     def error(self, exc: BaseException):
         if self.__file is None:

@@ -269,8 +269,9 @@ def child_main(task: str, ctx: Ctx):
 
 
 class Report:
-    def __init__(self, ctx: Ctx, argv: list[str]):
+    def __init__(self, ctx: Ctx, argv: list[str], name: str = "rocm_check", title: str = "OneTrainer ROCm/GPU check"):
         self.ctx = ctx
+        self.title = title
         self.started = time.strftime("%Y-%m-%d %H:%M:%S")
         self.argv = argv
         # in the header, so every report (also one made with --only, which skips the environment check) says which
@@ -279,8 +280,8 @@ class Report:
         self.stack = torch_stack()
         self.results: list[dict] = []
         self.running: str | None = None
-        self.txt_path = os.path.join(ctx.out_dir, "rocm_check_report.txt")
-        self.json_path = os.path.join(ctx.out_dir, "rocm_check_report.json")
+        self.txt_path = os.path.join(ctx.out_dir, f"{name}_report.txt")
+        self.json_path = os.path.join(ctx.out_dir, f"{name}_report.json")
 
     def write(self):
         data = {
@@ -300,7 +301,7 @@ class Report:
             f.write(self.text())
 
     def text(self) -> str:
-        out = [f"OneTrainer ROCm/GPU check  ({'full' if self.ctx.full else 'quick'} mode, device {self.ctx.device})",
+        out = [f"{self.title}  ({'full' if self.ctx.full else 'quick'} mode, device {self.ctx.device})",
                f"started {self.started}",
                f"OneTrainer {self.onetrainer}, {stack_label(self.stack)}",
                f"command: {' '.join(self.argv)}", ""]

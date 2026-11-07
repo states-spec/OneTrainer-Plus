@@ -564,12 +564,15 @@ class GenericTrainer(BaseTrainer):
             torch.clear_autocast_cache()
             self.model.optimizer.train()
 
+        average_losses = {}
         for concept_seed, total_loss in accumulated_loss_per_concept.items():
             average_loss = total_loss / concept_counts[concept_seed]
+            average_losses[mapping_seed_to_label[concept_seed]] = average_loss
 
             self.tensorboard.add_scalar(f"loss/validation_step/{mapping_seed_to_label[concept_seed]}",
                                         average_loss,
                                         train_progress.global_step)
+        diagnostics.validation(train_progress.global_step, average_losses)
 
         if len(concept_counts) > 1:
             total_loss = sum(accumulated_loss_per_concept[key] for key in concept_counts)

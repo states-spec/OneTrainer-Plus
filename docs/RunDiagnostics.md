@@ -41,6 +41,7 @@ record, written at once, so a crash or a GPU hang still leaves everything before
 | `step` | every optimizer step | loss, seconds since the previous step, memory now and its peak since the last record |
 | `phase` | loading, model setup, each epoch start (caching), sampling, validation, backup, save, final save | duration, memory before and after, the peak inside it, fragmentation after it |
 | `move` | a model part loaded onto or unloaded from the GPU | parts, duration, memory and fragmentation after it |
+| `validation` | each validation run | each validation concept's loss (as TensorBoard shows it) |
 | `output` | after the final save | a digest of the saved weights: two runs that saved the same weights have the same one |
 | `error` | the exception that ended the run, out of memory included | message and the memory state at that moment |
 
