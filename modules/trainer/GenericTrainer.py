@@ -145,6 +145,8 @@ class GenericTrainer(BaseTrainer):
         if multi.is_master():
             self.__save_config_to_workspace()
             self.__check_concept_paths()
+            if self.config.validation:
+                self.__report_validation_concepts()
             if self.config.masked_training:
                 self.__report_images_without_mask()
 
@@ -311,6 +313,19 @@ class GenericTrainer(BaseTrainer):
             if not os.path.isdir(concept.path):
                 raise ValueError(f"{label} points to {concept.path!r}, which isn't a folder (relative paths start at "
                                  f"{os.getcwd()}). Choose the folder with its images on the concepts tab, or disable it.")
+
+    def __report_validation_concepts(self):
+        # the validation loader takes only concepts of type Validation, and with none (or none enabled) every
+        # validation returned without a word: no validation loss, though Validation was on
+        concepts = self.__load_concepts()
+        if concepts is None:
+            return
+        validation = [c for c in concepts if ConceptType(c.type) == ConceptType.VALIDATION]
+        if not any(c.enabled for c in validation):
+            where = "" if self.config.concepts is not None else f" in {self.config.concept_file_name}"
+            print(f"Validation is on, but no {'enabled ' if validation else ''}concept{where} is of type Validation "
+                  f"(Concept Type VALIDATION in the concept's window), so no validation loss is computed. A concept "
+                  f"of another type is trained on.")
 
     def __report_images_without_mask(self):
         # masked training gives an image without a mask file an all-white mask, which trains the whole image
