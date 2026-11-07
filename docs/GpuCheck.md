@@ -172,13 +172,17 @@ a 27 GB download on first use), about 50 GB of RAM (float32 references on the CP
 Section 1 loads the real weights and compares bf16 on the GPU with float32 on the CPU, given the same inputs: the text
 encoder (only Qwen3.5's language model is loaded; fla's linear-attention kernels against PyTorch's; a padded batch,
 as sampling encodes prompt and negative prompt together, against single captions), the FLUX.2 VAE (encode, decode,
-round trip, the latent packing, a first and a second decode at 1024 px) and the transformer (two texts of different
-lengths in one batch, i.e. with the text mask, against each sample alone). Section 2 trains LoRAs through
+round trip, the latent packing) and the transformer (two texts of different lengths in one batch, i.e. with the
+text mask, against each sample alone), each in a process of its own, so no GPU memory stays held for the training
+runs. A GPU-only check decodes at 1024 px in fresh processes (your MIOpen caches twice, empty ones,
+`MIOPEN_FIND_MODE=FAST`, PyTorch's MIOpen immediate mode) to see what the first decode in a process costs. Section 2 trains LoRAs through
 `scripts/train.py` from one saved start, with a validation concept and a sample whose negative prompt is longer than
 the prompt (classifier-free guidance runs both as one masked batch), and compares each run with the baseline and a
 repeat of it: layer + activation offloading, disk streaming off, text encoder offloading, resuming (Continue from last
 backup, Continue from Backup), compiled blocks, and the saved LoRA loaded back at learning rate 0. Runs that train the
-same weights must also sample the same images. `--config` takes the training settings from your config; the data
+same weights must also sample the same images. Other programs share the GPU, so the free memory before each run
+is only reported, the runs log the GPU memory at every load and unload (`OT_LOG_VRAM`), and a run that runs out of
+GPU memory is tried once more (the first attempt's folder is kept as `<run>_out_of_memory`). `--config` takes the training settings from your config; the data
 (synthetic images with masks and captions of 3 to 70 words), schedule, resolution (`--resolution`, default 512) and
 outputs are the check's. The report goes to `diagnostics/moss_check/moss_check_report.txt`/`.json`, every run's sample
 images to `diagnostics/moss_check/samples/` (the step-0 sample is the base model's image of the prompt: look at it for

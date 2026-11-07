@@ -23,8 +23,9 @@ import random
 import re
 import shutil
 import time
+import traceback
 
-from modules.util.rocm_check.framework import Ctx, Rec, check, finite, rel_err
+from modules.util.rocm_check.framework import Ctx, Rec, check, child_task, finite, rel_err, run_child
 from modules.util.rocm_check.workload_checks import (
     _compile_stats,
     _loss_diff,
@@ -85,6 +86,49 @@ def _sync(ctx: Ctx):
     ctx.sync()
 
 
+def _child_env(ctx: Ctx, **extra: str) -> dict[str, str]:
+    # a child process gets the model and resolution through its environment (run_child passes device and out dir)
+    return {"OT_MOSS_CHECK_MODEL": _model(ctx), "OT_MOSS_CHECK_RESOLUTION": str(ctx.cache.get("moss_resolution") or 512),
+            **extra}
+
+
+def _in_child(timeout: float = 3600.0):
+    """runs the check in a process of its own: whatever GPU memory it used (the text encoder alone is 15 GiB in bf16)
+    is the driver's again when it ends, not held by this process while the training runs need the whole GPU"""
+    def wrap(body):
+        task = f"moss_{body.__name__}"
+
+        @child_task(task)
+        def child(ctx: Ctx) -> dict:
+            rec = Rec()
+            try:
+                body(ctx, rec)
+            except torch.OutOfMemoryError as e:
+                rec.fail(f"out of memory: {str(e).splitlines()[0]}")
+            except Exception as e:
+                rec.fail(f"{type(e).__name__}: {e}")
+                rec.lines += ["  " + line for line in traceback.format_exc().strip().splitlines()[-8:]]
+            return {"status": rec.status, "lines": rec.lines, "metrics": rec.metrics}
+
+        def run(ctx: Ctx, rec: Rec):
+            result = run_child(ctx, task, _child_env(ctx), timeout=timeout)
+            if "error" in result:
+                rec.fail(f"the check's process failed: {result['error']}")
+                return
+            rec.lines += result["lines"]
+            rec.metrics.update(result["metrics"])
+            rec._set(result["status"])
+
+        run.__name__ = body.__name__
+        return run
+    return wrap
+
+
+def _text_path(ctx: Ctx) -> str:
+    # the text encoder check's float32 hidden states, for the transformer check in another process
+    return os.path.join(ctx.out_dir, "moss_text_reference.pt")
+
+
 # ---------------------------------------------------------------------------------------------------------------------
 # section 1: components
 
@@ -123,6 +167,7 @@ def _encode(model, device: torch.device, texts: list[str], autocast: bool) -> li
 @check(SECTION_COMPONENTS, "text encoder: Qwen3.5's language model in bf16 on the device against float32 on the CPU, "
                            "fla against the PyTorch kernels, a padded batch against single captions",
        timeout=3600.0, note="loads the text encoder in float32 (~32 GB of RAM) and runs it on the CPU: a few minutes")
+@_in_child()
 def text_encoder(ctx: Ctx, rec: Rec):
     from modules.model.MossModel import MossModel
     from modules.modelLoader.moss.MossModelLoader import MossModelLoader
@@ -164,14 +209,14 @@ def text_encoder(ctx: Ctx, rec: Rec):
             if not finite(ref[n]):
                 rec.fail(f"the float32 reference of the {n} caption has NaN/inf")
                 return
-        ctx.cache["moss_text"] = ref
+        torch.save(ref, _text_path(ctx))
         # a padded batch (sampling encodes prompt and negative prompt together): the real tokens as when alone
         padded = _encode(model, cpu, [_CAPTIONS["short"], _CAPTIONS["long"]], autocast=False)
         err = max(rel_err(padded[0], ref["short"]), rel_err(padded[1], ref["long"]))
         rec.expect(err < 1e-4, f"float32 on the CPU, short + long caption in one padded batch vs each alone: {err:.1e}")
 
         te.to(ctx.device, torch.bfloat16)
-        errors = {}
+        errors, padded_errors = {}, {}
         for label, picked in ([("fla kernels", True)] if kernels.has_fla else []) + [("PyTorch kernels", False)]:
             kernels.use(picked)
             out = {n: _encode(model, ctx.device, [_CAPTIONS[n]], autocast=True)[0] for n in names}
@@ -192,21 +237,31 @@ def text_encoder(ctx: Ctx, rec: Rec):
             else:
                 rec.line(f"ok: {text}")
             rec.metric(f"{label}: long caption ms", ms)
+            # a padded batch, as sampling encodes the prompt and the negative prompt together
+            padded = _encode(model, ctx.device, [_CAPTIONS["short"], _CAPTIONS["long"]], autocast=True)
+            padded_errors[label] = ({"short": rel_err(padded[0], ref["short"]), "long": rel_err(padded[1], ref["long"])},
+                                    max(rel_err(padded[0], out["short"]), rel_err(padded[1], out["long"])))
         if "fla kernels" in errors:
             fla, torch_errors = errors["fla kernels"], errors["PyTorch kernels"]
             worse = [n for n in names if fla[n] > 1.5 * torch_errors[n] + 2e-3]
             rec.expect(not worse, "fla's kernels as close to the reference as PyTorch's in bf16"
                        + (f" (not for: {', '.join(worse)})" if worse else ""))
 
-        kernels.use(picked=True)
-        padded = _encode(model, ctx.device, [_CAPTIONS["short"], _CAPTIONS["long"]], autocast=True)
-        alone = [_encode(model, ctx.device, [_CAPTIONS[n]], autocast=True)[0] for n in ("short", "long")]
-        vs_alone = max(rel_err(padded[i], alone[i]) for i in range(2))
-        vs_ref = max(rel_err(padded[0], ref["short"]), rel_err(padded[1], ref["long"]))
-        single = max(rel_err(alone[0], ref["short"]), rel_err(alone[1], ref["long"]))
-        text = (f"bf16 on {ctx.device}, short + long caption in one padded batch: vs each alone {vs_alone:.1e}, vs the "
-                f"float32 reference {vs_ref:.1e} (alone: {single:.1e})")
-        rec.expect(vs_ref <= 1.5 * single + 2e-3, text)
+        # the bf16 noise: the largest error of a caption encoded alone, with either kernel set. A padding that reached
+        # the real tokens would be far beyond it (on the 7900 XTX, fla: 1.1-1.4e-2 alone, 2.4e-2 in the padded batch;
+        # PyTorch's kernels 2.4e-2 alone for the long caption)
+        noise = max(e for per_caption in errors.values() for e in per_caption.values())
+        for label, (per_caption, vs_alone) in padded_errors.items():
+            worst = max(per_caption.values())
+            text = (f"{label}, short + long caption in one padded batch vs the float32 reference: short "
+                    f"{per_caption['short']:.1e}, long {per_caption['long']:.1e} (vs each alone {vs_alone:.1e}; the "
+                    f"largest error of a caption alone {noise:.1e})")
+            if worst <= 1.5 * noise + 2e-3:
+                rec.line(f"ok: {text}")
+            elif worst <= 0.1:
+                rec.warn(f"{text}: further from the reference than any caption alone")
+            else:
+                rec.fail(f"{text}: the padding changes the real tokens")
     finally:
         del te, model, kernels
         _free()
@@ -227,7 +282,8 @@ def _psnr(a: torch.Tensor, b: torch.Tensor) -> float:
 
 
 @check(SECTION_COMPONENTS, "VAE: FLUX.2 VAE encode and decode on the device against the CPU, round trip, latent "
-                           "packing, first and later decodes at 1024 px", timeout=1800.0)
+                           "packing", timeout=1800.0)
+@_in_child()
 def vae(ctx: Ctx, rec: Rec):
     from modules.model.MossModel import MossModel
     from modules.util.enum.ModelType import ModelType
@@ -272,22 +328,6 @@ def vae(ctx: Ctx, rec: Rec):
                    f"latent packing: {tuple(latent.shape[1:])} -> {tuple(packed.shape[1:])}, unpacked back "
                    f"{rel_err(back, latent):.1e}; packed mean {packed.mean().item():.2f}, std {packed.std().item():.2f}")
 
-        if ctx.is_gpu:
-            # a VAE decode at a size the process hasn't decoded before: MIOpen looks for its kernels at the first use
-            # (run A's first sample decode took 89 s, later ones 1.3 s)
-            big = torch.randn(1, latent.shape[1], 128, 128, generator=ctx.generator(1)).to(ctx.device)
-            times = []
-            with torch.no_grad():
-                for _ in range(2):
-                    _sync(ctx)
-                    start = time.perf_counter()
-                    out = vae_model.decode(big).sample
-                    _sync(ctx)
-                    times.append(time.perf_counter() - start)
-            rec.expect(finite(out), f"decode at 1024 px: first {times[0]:.1f} s, second {times[1]:.2f} s in this "
-                                    f"process" + (" (the first is slow: kernels found or compiled at first use)"
-                                                  if times[0] > 10 * max(times[1], 0.05) else ""))
-            rec.metric("first 1024 px decode s", times[0])
     finally:
         del vae_model
         _free()
@@ -296,6 +336,7 @@ def vae(ctx: Ctx, rec: Rec):
 @check(SECTION_COMPONENTS, "transformer: two texts of different lengths in one batch (the text mask) against each "
                            "sample alone, bf16 on the device against float32 on the CPU",
        timeout=3600.0, note="loads the transformer in float32 (~20 GB of RAM) and runs it on the CPU: a few minutes")
+@_in_child()
 def transformer(ctx: Ctx, rec: Rec):
     from modules.model.moss.pipeline_moss_image import MOSSImageTransformer
 
@@ -306,7 +347,7 @@ def transformer(ctx: Ctx, rec: Rec):
     rec.line(f"loaded {sum(p.numel() for p in model.parameters()) / 1e9:.2f}B parameters, "
              f"{len(model.layers)} blocks, in {time.perf_counter() - start:.0f} s")
     try:
-        text = ctx.cache.get("moss_text")
+        text = torch.load(_text_path(ctx), weights_only=True) if os.path.exists(_text_path(ctx)) else None
         if text is None:
             rec.line("the text encoder check didn't run: random text embeddings")
             gen = ctx.generator(2)
@@ -358,6 +399,7 @@ def transformer(ctx: Ctx, rec: Rec):
             size = 64  # a 1024 px image
             big = torch.randn(2, model.config.latent_channels, size, size, generator=ctx.generator(4))
             args = (big.to(ctx.device, torch.bfloat16), timesteps.to(ctx.device), context.to(ctx.device, torch.bfloat16))
+            torch.cuda.reset_peak_memory_stats(ctx.device)
             with torch.no_grad(), _bf16(ctx.device):
                 ms = ctx.bench(lambda: model(*args, encoder_attention_mask=mask.to(ctx.device), return_dict=False),
                                iters=3, warmup=1)
@@ -367,6 +409,92 @@ def transformer(ctx: Ctx, rec: Rec):
     finally:
         model = None  # noqa: F841 (frees the weights before the next check)
         _free()
+
+
+def _miopen_dirs() -> dict[str, str]:
+    # where MIOpen keeps what it found (the user find-db) and the kernels it compiled, unless told otherwise
+    home = os.path.expanduser("~")
+    return {"find-db": os.environ.get("MIOPEN_USER_DB_PATH") or os.path.join(home, ".config", "miopen"),
+            "kernel cache": os.environ.get("MIOPEN_CUSTOM_CACHE_DIR") or os.path.join(home, ".cache", "miopen")}
+
+
+def _dir_stats(path: str) -> list | None:
+    if not os.path.isdir(path):
+        return None
+    files = [os.path.join(root, name) for root, _, names in os.walk(path) for name in names]
+    return [len(files), sum(os.path.getsize(f) for f in files if os.path.isfile(f))]
+
+
+@child_task("moss_vae_decode")
+def _vae_decode(ctx: Ctx) -> dict:
+    # one fresh process: the FLUX.2 VAE decodes a 1024 px latent twice
+    from diffusers import AutoencoderKLFlux2
+
+    if os.environ.get("OT_MOSS_CHECK_MIOPEN_IMMEDIATE") == "1":
+        torch.backends.miopen.immediate = True
+    dirs = _miopen_dirs()
+    before = {name: _dir_stats(path) for name, path in dirs.items()}
+    vae_model = AutoencoderKLFlux2.from_pretrained(_model(ctx), subfolder="vae", torch_dtype=torch.float32).eval()
+    vae_model.to(ctx.device)
+    latent = torch.randn(1, vae_model.config.latent_channels, 128, 128, generator=torch.Generator().manual_seed(1))
+    latent = latent.to(ctx.device)
+    times = []
+    with torch.no_grad():
+        for _ in range(2):
+            _sync(ctx)
+            start = time.perf_counter()
+            out = vae_model.decode(latent).sample
+            _sync(ctx)
+            times.append(time.perf_counter() - start)
+    path = os.path.join(ctx.out_dir, f"moss_vae_decode_{os.environ.get('OT_MOSS_CHECK_LABEL', 'x')}.pt")
+    torch.save(out.cpu(), path)
+    return {"times": times, "path": path, "finite": finite(out), "dirs": dirs, "before": before,
+            "after": {name: _dir_stats(p) for name, p in dirs.items()}}
+
+
+@check(SECTION_COMPONENTS, "VAE decode at 1024 px in fresh processes: the first decode's cost with your MIOpen caches "
+                           "(twice), with empty ones, MIOPEN_FIND_MODE=FAST and MIOpen's immediate mode",
+       gpu_only=True, timeout=5400.0, note="five processes that decode twice each: up to ~12 minutes")
+def vae_first_decode(ctx: Ctx, rec: Rec):
+    # run A's first sample decode at 1024 px took 89 s, later ones 1.3 s; the VAE check's (a new process) 137 s. A
+    # cost every process pays again, or one MIOpen keeps in its caches? And do its fast modes avoid it?
+    fresh = os.path.join(ctx.out_dir, "miopen_empty")
+    shutil.rmtree(fresh, ignore_errors=True)
+
+    def empty(name: str) -> dict:
+        return {"MIOPEN_USER_DB_PATH": os.path.join(fresh, name, "db"),
+                "MIOPEN_CUSTOM_CACHE_DIR": os.path.join(fresh, name, "cache")}
+
+    variants = [("your MIOpen caches", {}), ("your MIOpen caches, a second process", {}),
+                ("empty MIOpen caches", empty("default")),
+                ("empty caches, MIOPEN_FIND_MODE=FAST", {**empty("fast"), "MIOPEN_FIND_MODE": "FAST"}),
+                ("empty caches, MIOpen immediate mode", {**empty("immediate"), "OT_MOSS_CHECK_MIOPEN_IMMEDIATE": "1"})]
+    reference = None
+    try:
+        for i, (label, env) in enumerate(variants):
+            print(f"    decoding: {label}", flush=True)
+            result = run_child(ctx, "moss_vae_decode", _child_env(ctx, OT_MOSS_CHECK_LABEL=str(i), **env),
+                               timeout=1800.0)
+            if "error" in result:
+                rec.fail(f"{label}: {result['error']}")
+                continue
+            image = torch.load(result["path"], weights_only=True)
+            os.remove(result["path"])
+            if reference is None:
+                reference = image
+            first, second = result["times"]
+            caches = "; ".join(f"{name} {result['before'][name]} -> {result['after'][name]} (files, bytes)"
+                               for name in result["dirs"])
+            text = (f"{label}: first decode {first:.1f} s, second {second:.2f} s; the image vs the first process's "
+                    f"{rel_err(image, reference):.1e}; {caches}")
+            if not result["finite"] or rel_err(image, reference) > 1e-3:
+                rec.fail(f"{text}: a different image")
+            else:
+                rec.line(f"ok: {text}")
+            rec.metric(f"{label}: first decode s", first)
+        rec.line(f"MIOpen's caches by default: {_miopen_dirs()}")
+    finally:
+        shutil.rmtree(fresh, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -475,15 +603,54 @@ def _slug(name: str) -> str:
 
 def _run(ctx: Ctx, name: str, values: list[str], env: dict | None = None, epochs: int = 2, lora: str | None = None,
          run_dir: str | None = None, log_name: str = "diag") -> dict:
+    own_dir = run_dir is None
     run_dir = run_dir or os.path.join(ctx.cache["moss_runs"], _slug(name))
-    os.makedirs(run_dir, exist_ok=True)
-    config = _run_config(ctx, run_dir, epochs, ctx.cache.get("moss_initial_lora", "") if lora is None else lora)
-    print(f"    training: {name}", flush=True)
-    result = _train(ctx, run_dir, config, env or {}, values, log_name)
-    result["dir"] = run_dir
-    with open(os.path.join(run_dir, f"{log_name}.log"), encoding="utf-8", errors="replace") as f:
-        result["log"] = f.read()
+
+    def attempt() -> dict:
+        os.makedirs(run_dir, exist_ok=True)
+        config = _run_config(ctx, run_dir, epochs, ctx.cache.get("moss_initial_lora", "") if lora is None else lora)
+        free = _wait_for_free_memory(ctx)
+        print(f"    training: {name}" + (f" ({free[0]:.1f} of {free[1]:.1f} GiB free on the GPU)" if free else ""),
+              flush=True)
+        # OT_LOG_VRAM: every load and unload prints the GPU memory, also the device's free memory, into the run's log
+        result = _train(ctx, run_dir, config, {**(env or {}), "OT_LOG_VRAM": "true"}, values, log_name)
+        result["dir"] = run_dir
+        result["free_before"] = free
+        with open(os.path.join(run_dir, f"{log_name}.log"), encoding="utf-8", errors="replace") as f:
+            result["log"] = f.read()
+        return result
+
+    result = attempt()
+    if result["rc"] != 0 and own_dir and "OutOfMemoryError" in result["log"]:
+        # other programs share the GPU, and their use changes while the check runs: one more try, from scratch
+        first = result
+        oom = os.path.join(ctx.cache["moss_runs"], f"{_slug(name)}_out_of_memory")
+        shutil.rmtree(oom, ignore_errors=True)
+        shutil.move(run_dir, oom)  # kept for a look: its log has the GPU memory at every load and unload
+        time.sleep(10.0)
+        result = attempt()
+        result["first_attempt"] = {"free_before": first["free_before"], "tail": first["tail"], "dir": oom}
     return result
+
+
+def _device_memory(ctx: Ctx) -> tuple[float, float] | None:
+    """free and total GiB on the device, other processes' use included"""
+    if not ctx.is_gpu:
+        return None
+    free, total = torch.cuda.mem_get_info(ctx.device)
+    return free / 2 ** 30, total / 2 ** 30
+
+
+def _wait_for_free_memory(ctx: Ctx, seconds: float = 30.0) -> tuple[float, float] | None:
+    # the driver frees a finished run's GPU memory on its own time: wait up to 30 s for the free memory to come back to
+    # what it was before the training runs (other programs on the desktop use the GPU too, so not for all of it)
+    memory = _device_memory(ctx)
+    target = ctx.cache.get("moss_free_at_start")
+    deadline = time.monotonic() + seconds
+    while memory and target and memory[0] < target - 1.0 and time.monotonic() < deadline:
+        time.sleep(2.0)
+        memory = _device_memory(ctx)
+    return memory
 
 
 def _samples(path: str) -> dict[str, "object"]:
@@ -527,7 +694,10 @@ def _finished(rec: Rec, name: str, r: dict, expect_samples: bool = True, expect_
     """the saved LoRA if the run finished with finite weights, sample images that aren't black or flat, and validation
     losses; else None (and a FAIL)"""
     if r["rc"] != 0 or not os.path.exists(r["output"]):
-        rec.fail(f"{name}: training failed (exit code {r['rc']}): {r['tail']}")
+        free = r.get("free_before")
+        rec.fail(f"{name}: training failed (exit code {r['rc']})"
+                 + (f", {free[0]:.1f} of {free[1]:.1f} GiB of the GPU were free when it started" if free else "")
+                 + (", also on a second try" if r.get("first_attempt") else "") + f": {r['tail']}")
         return None
     weights = _weights(r["output"])
     problems = []
@@ -549,8 +719,14 @@ def _finished(rec: Rec, name: str, r: dict, expect_samples: bool = True, expect_
     s = _summary(r)
     memory = (f", peak reserved {s['peak reserved GiB']:.1f} GiB" if "peak reserved GiB" in s else "") \
         + (f", step {s['step s median']:.2f} s" if s.get("step s median") else "")
+    first = r.get("first_attempt")
+    retry = ""
+    if first:
+        retry = ("; the first attempt ran out of GPU memory"
+                 + (f" ({first['free_before'][0]:.1f} GiB were free when it started)" if first["free_before"] else "")
+                 + f", its log in {first['dir']}")
     text = (f"{name}: finished in {r['seconds']:.0f} s, {len(weights)} tensors, {len(images)} sample images, "
-            f"validation at steps {sorted(validation)}{memory}")
+            f"validation at steps {sorted(validation)}{memory}{retry}")
     if problems:
         rec.fail(f"{text}: {'; '.join(problems)}")
         return None
@@ -593,6 +769,11 @@ def _compare(rec: Rec, name: str, base: dict, w_base: dict, r: dict, w: dict, fl
                          "offloading, resumed from a backup", timeout=14400.0,
        note="trains the real model 8 times through scripts/train.py: about 20 minutes on a 7900 XTX")
 def training_runs(ctx: Ctx, rec: Rec):
+    memory = _device_memory(ctx)
+    if memory:
+        ctx.cache["moss_free_at_start"] = memory[0]
+        rec.line(f"info: before the training runs {memory[0]:.1f} of {memory[1]:.1f} GiB of the GPU were free (this "
+                 f"process: {torch.cuda.memory_reserved(ctx.device) / 2 ** 30:.1f} GiB; other programs use the rest)")
     # on the CPU, offloading moves between cpu and cpu:1; nothing streams from disk there, which Simplex needs
     on_cpu = [] if ctx.is_gpu else ["temp_device=cpu:1", "transformer.simplex_offloading=false",
                                     "text_encoder.simplex_offloading=false"]

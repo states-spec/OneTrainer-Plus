@@ -8,7 +8,7 @@ import sys
 
 import modules.util.rocm_check.moss_checks as moss_checks
 from modules.util import path_util
-from modules.util.rocm_check.framework import FAIL, REGISTRY, Ctx, Report, run_checks
+from modules.util.rocm_check.framework import FAIL, REGISTRY, Ctx, Report, child_main, run_checks
 
 import torch
 
@@ -20,13 +20,14 @@ def main():
                     "resuming, compiling and a round trip of the saved LoRA, each compared with a baseline. About "
                     "30 minutes on a 7900 XTX; needs ~50 GB of RAM and the model (27 GB download). Writes "
                     "moss_check_report.txt and .json and every run's sample images to diagnostics/moss_check.")
-    parser.add_argument("--model", default=moss_checks.DEFAULT_MODEL,
+    # the component checks run in child processes, which get the model and resolution through their environment
+    parser.add_argument("--model", default=os.environ.get("OT_MOSS_CHECK_MODEL", moss_checks.DEFAULT_MODEL),
                         help=f"the MOSS-Image model: a Hugging Face repo or a local folder (default: "
                              f"{moss_checks.DEFAULT_MODEL})")
     parser.add_argument("--config", help="a training config (e.g. saved from the UI) to take the training settings "
                                          "from: optimizer, learning rate, LoRA, dtypes, EMA, masking. The runs still "
                                          "set the data, schedule, resolution and output themselves")
-    parser.add_argument("--resolution", type=int, default=512,
+    parser.add_argument("--resolution", type=int, default=int(os.environ.get("OT_MOSS_CHECK_RESOLUTION", "512")),
                         help="training and sample resolution of the runs (default: 512)")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--full", action="store_true", help="also a short full fine-tune of the transformer")
@@ -36,6 +37,8 @@ def main():
     parser.add_argument("--only", nargs="+", help="run only checks whose 'section / name' contains one of these")
     parser.add_argument("--skip", nargs="+", help="skip checks whose 'section / name' contains one of these")
     parser.add_argument("--list", action="store_true", help="list the checks and exit")
+    parser.add_argument("--child", help=argparse.SUPPRESS)
+    parser.add_argument("--seed", type=int, default=0, help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     # the helpers moss_checks shares with rocm_check register rocm_check's own training checks too
@@ -54,11 +57,18 @@ def main():
     if device.type == "cuda":
         torch.cuda.set_device(device)
     ctx = Ctx(device=device, full=args.full, out_dir=out_dir, script_path=os.path.abspath(__file__),
-              resolutions=[args.resolution])
+              resolutions=[args.resolution], seed=args.seed)
+    if args.child:
+        ctx.cache.update({"moss_model": args.model, "moss_resolution": args.resolution})
+        child_main(args.child, ctx)
+        return 0
+
     runs = os.path.join(out_dir, "runs")
     if os.path.isdir(runs):
         import shutil
         shutil.rmtree(runs)
+    if os.path.exists(moss_checks._text_path(ctx)):
+        os.remove(moss_checks._text_path(ctx))  # the text encoder check writes it anew for the transformer check
     ctx.cache.update({"moss_model": args.model, "moss_config": os.path.abspath(args.config) if args.config else None,
                       "moss_resolution": args.resolution, "moss_runs": runs})
 
