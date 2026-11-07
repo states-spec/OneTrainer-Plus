@@ -371,6 +371,46 @@ def prodigy_adv_nesterov(ctx: Ctx, rec: Rec):
                                f"moved (limit 1e-4)")
 
 
+@check(SECTION, "PRODIGY_ADV resumed from a saved state continues as the uninterrupted run, D's estimate included")
+def prodigy_adv_resume(ctx: Ctx, rec: Rec):
+    # Prodigy_adv decays its D numerator by beta3 at the start of every step, but a loaded optimizer's first step
+    # started it from the saved value without the decay (adv_optm 2.6.3): D's estimate came out 1/beta3 too high and a
+    # resumed run drifted from the uninterrupted one. create._prodigy_adv_resume_numerator restores the decay. The
+    # every-optimizer check didn't see it: there D stays at Initial D, where the numerator makes no difference
+    from modules.util.enum.Optimizer import Optimizer
+
+    import adv_optm
+
+    overrides = {"d0": 1e-6}
+    run = _OptimizerRun(ctx, Optimizer.PRODIGY_ADV, None, ctx.device, torch.float32, overrides=overrides)
+    targets = [_rand(ctx, *p.shape, scale=0.1, seed=500 + j).to(ctx.device) for j, p in enumerate(run.params)]
+
+    def step(r: _OptimizerRun, i: int):
+        # noise plus a pull toward a target: the gradients agree with the distance moved, so D grows
+        for j, p in enumerate(r.params):
+            p.grad = 0.1 * _rand(ctx, *p.shape, seed=3000 * i + j).to(ctx.device) + 0.5 * (p.detach() - targets[j])
+        r.opt.step()
+        r.opt.zero_grad(set_to_none=True)
+
+    for i in range(8):
+        step(run, i)
+    resumed = _OptimizerRun(ctx, Optimizer.PRODIGY_ADV, None, ctx.device, torch.float32, params=run.params,
+                            state_dict=run.saved_state(), overrides=overrides)
+    d, d_resumed = [], []
+    for i in range(8, 16):
+        step(run, i)
+        step(resumed, i)
+        d.append(run.opt.param_groups[0]["d"])
+        d_resumed.append(resumed.opt.param_groups[0]["d"])
+    rec.line(f"adv_optm {adv_optm.__version__}; D after the resume: {', '.join(f'{v:.3e}' for v in d)}")
+    if d[-1] <= 2 * overrides["d0"]:
+        rec.warn("D stayed near Initial D, so the resume of its estimate wasn't tested")
+    weights = max(rel_err(a, b) for a, b in zip(resumed.weights(), run.weights(), strict=True))
+    worst_d = max(abs(a - b) / a for a, b in zip(d, d_resumed, strict=True))
+    rec.expect(worst_d == 0 and weights <= (0 if not ctx.is_gpu else 1e-6),
+               f"resumed after 8 steps, 8 more: D {worst_d:.1e} apart (relative), weights {weights:.1e}")
+
+
 @check(SECTION, "ADOPT_ADV Nesterov: the same step at gradient scales 1e-2 and 1e2")
 def adopt_adv_nesterov(ctx: Ctx, rec: Rec):
     # ADOPT normalizes the gradient by its running second moment, so the same gradients scaled by any factor move the
