@@ -865,20 +865,30 @@ def compiled_training(ctx: Ctx, rec: Rec):
     recompiles = len(re.findall(r"Recompiling function", r["log"]))
     w_base = _weights(base["output"])
     diff = _weights_diff(w_base, w)
+    # the distance alone overstates it with an adaptive step size: Prodigy's D grows from 1e-6 within the first steps,
+    # rounding moves when it grows, and the whole update scales with it (the user's config: weights 1.5 apart after 8
+    # steps). What the compiled blocks must keep is the update's direction from the common start
+    start = _weights(ctx.cache["moss_initial_lora"])
+    eager_delta = torch.cat([(w_base[k] - start[k]).flatten() for k in sorted(w_base)])
+    compiled_delta = torch.cat([(w[k] - start[k]).flatten() for k in sorted(w_base)])
+    cosine = torch.nn.functional.cosine_similarity(eager_delta, compiled_delta, dim=0).item()
+    ratio = (compiled_delta.norm() / eager_delta.norm().clamp_min(1e-30)).item()
     base_losses, losses = _losses(base["diag"]), _losses(r["diag"])
     first = min(base_losses.keys() & losses.keys(), default=None)
     first_diff = abs(base_losses[first] - losses[first]) / max(abs(base_losses[first]), 1e-12) \
         if first is not None else float("inf")
     s_base, s = _summary(base), _summary(r)
-    text = (f"compiled vs eager: first loss {first_diff:.1e}, weights {diff:.1e}; {graphs} compiled variants "
+    text = (f"compiled vs eager: first loss {first_diff:.1e}, weights {diff:.1e}; the change from the start LoRA "
+            f"points the same way to cosine {cosine:.3f}, its size {ratio:.2f}x eager's; {graphs} compiled variants "
             f"({recompiles} recompiles), {breaks} graph breaks; step {s.get('step s median') or 0:.2f} s vs "
             f"{s_base.get('step s median') or 0:.2f} s")
-    if graphs == 0 or breaks or first_diff > 2e-2:
+    if graphs == 0 or breaks or first_diff > 2e-2 or cosine < 0.7:
         ctx.cache["moss_failed"] = True
         rec.fail(f"{text}: " + ("nothing was compiled" if graphs == 0 else "graph breaks" if breaks else
-                                "the compiled forward pass differs"))
-    elif diff > 0.3:
-        rec.warn(f"{text}: trained further apart than rounding usually makes them")
+                                "the compiled forward pass differs" if first_diff > 2e-2 else
+                                "the compiled run trained in another direction"))
+    elif cosine < 0.9:
+        rec.warn(f"{text}: the compiled run's update points further from eager's than rounding usually makes it")
     else:
         rec.line(f"ok: {text}")
 
