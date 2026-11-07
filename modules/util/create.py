@@ -469,6 +469,28 @@ def _restore_kourkoutas_helper(optimizer: torch.optim.Optimizer):
         optimizer.kourkoutas_helper = KourkoutasHelper(optimizer)
 
 
+def _prodigy_adv_resume_numerator(optimizer: torch.optim.Optimizer):
+    # Prodigy_adv (adv_optm 2.6.3) decays its D numerator by beta3 at the start of every step: init_step, run at the
+    # end of each step, makes the accumulator beta3 x the value the step stored in the group. A loaded optimizer has no
+    # accumulators yet, so the init_step in its load_state_dict does nothing, and the first step_parameter creates the
+    # numerator from the stored value without the decay: after every resume D's estimate came out 1/beta3 too high
+    # (0.5% at the default betas) and the resumed run drifted from the uninterrupted one (weights 1.6e-3 apart after 4
+    # steps on the tiny MOSS). The accumulators are created at the first step as a continuing run has them, on the
+    # device of the first parameter that steps. A version that creates them itself leaves this a no-op.
+    if type(optimizer).__name__ != "Prodigy_adv" or hasattr(optimizer, "d_denom") \
+            or not callable(getattr(optimizer, "init_step", None)):
+        return
+    step_parameter = optimizer.step_parameter
+
+    def first_step_parameter(p, group, i=None):
+        if not hasattr(optimizer, "d_denom") and p.grad is not None:
+            optimizer.d_denom = torch.tensor(0.0, device=p.device)
+            optimizer.init_step()
+        return step_parameter(p, group, i)
+
+    optimizer.step_parameter = first_step_parameter
+
+
 def _drop_mismatched_kourkoutas_state(optimizer: torch.optim.Optimizer):
     # Kourkoutas-beta keeps one running gradient norm per layer, per row for tagged LoRA/OFT parameters (see
     # tag_util). A backup made before the parameters were tagged has one value per layer, which fails in the first
@@ -1568,6 +1590,7 @@ def create_optimizer(
             _restore_adv_optm_state_dtypes(optimizer, state_dict)
             _restore_kourkoutas_helper(optimizer)
             _drop_mismatched_kourkoutas_state(optimizer)
+            _prodigy_adv_resume_numerator(optimizer)
             if optimizer_config.optimizer in _NESTEROV_FIXED_IN:
                 _check_resumed_adv_nesterov(optimizer, optimizer_config.optimizer)
 
