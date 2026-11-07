@@ -68,6 +68,31 @@ _WORDS = ["red", "green", "blue", "golden", "silver", "cat", "dog", "horse", "ho
           "sketch", "close-up", "wide", "shot"]
 
 
+def preflight(repo_root: str) -> tuple[str | None, str | None]:
+    """(an error that stops the check, a note) about the Python running it: the training runs start scripts/train.py
+    with this same Python, so one without OneTrainer's requirements (another venv or conda env than the one the
+    launchers activate) would fail every run, after the component checks"""
+    import sys
+
+    try:
+        import modules.util.config.TrainConfig  # noqa: F401
+        import modules.util.create  # noqa: F401
+    except ImportError as e:
+        return (f"this Python can't run OneTrainer's training ({e}).\n  Python: {sys.executable}, torch "
+                f"{torch.__version__}\n  The training runs start scripts/train.py with the same Python. Start the "
+                f"check through the launcher, which activates OneTrainer's environment:\n"
+                f"    ./run-cmd.sh moss_check <the same arguments>"), None
+    requirements = "requirements-rocm.txt" if torch.version.hip else "requirements-cuda.txt" if torch.version.cuda \
+        else "requirements-default.txt"
+    with contextlib.suppress(OSError):
+        with open(os.path.join(repo_root, requirements), encoding="utf-8") as f:
+            pinned = next((m.group(1) for m in (re.match(r"torch==([^;\s#]+)", line) for line in f) if m), None)
+        if pinned and pinned != torch.__version__:
+            return None, (f"note: torch {torch.__version__} in {sys.executable}, {requirements} pins {pinned}: the "
+                          f"results describe this build")
+    return None, None
+
+
 def _model(ctx: Ctx) -> str:
     return ctx.cache.get("moss_model") or DEFAULT_MODEL
 

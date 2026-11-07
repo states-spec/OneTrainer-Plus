@@ -185,7 +185,7 @@ turns a rounding difference into another trajectory, so the compiled run is judg
 from the start LoRA with every value moved by 2^-8 of itself (about one bfloat16 rounding step). The compiled run's
 change from the start must point about as close to the baseline's as the yardstick's does (cosine), be about as large,
 start from the same loss, and compile without graph breaks; whether the compiled gradients are right is rocm_check's
-"compile per model family" (MOSS family). Other programs share the GPU, so the free memory before each run
+"compile per model family" (MOSS family). The training runs start `scripts/train.py` with the Python that runs the check, so the check stops at once when that Python lacks OneTrainer's requirements (start it with `./run-cmd.sh moss_check`, which activates OneTrainer's environment), and notes a torch other than the one the requirements pin. Other programs share the GPU, so the free memory before each run
 is only reported, the runs log the GPU memory at every load and unload (`OT_LOG_VRAM`), and a run that runs out of
 GPU memory is tried once more (the first attempt's folder is kept as `<run>_out_of_memory`). `--config` takes the training settings from your config; the data
 (synthetic images with masks and captions of 3 to 70 words), schedule, resolution (`--resolution`, default 512) and

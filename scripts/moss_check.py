@@ -63,6 +63,13 @@ def main():
         child_main(args.child, ctx)
         return 0
 
+    error, note = moss_checks.preflight(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if error:
+        print(f"moss_check: {error}", file=sys.stderr)
+        return 2
+    if note:
+        print(note)
+
     runs = os.path.join(out_dir, "runs")
     if os.path.isdir(runs):
         import shutil
